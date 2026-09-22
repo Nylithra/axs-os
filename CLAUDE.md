@@ -21,7 +21,7 @@ BIOS/UEFI ile açılan bir ISO olarak çalışır.
 
 | Komut | Açıklama |
 |---|---|
-| `./build.sh` | Her şeyi sırayla derler (indirme dahil). İlk derleme ~15 dk, sonrakiler artımlı (~25 sn). |
+| `./build.sh` | Her şeyi sırayla derler (indirme dahil). İlk derleme ~8 dk (4 çekirdek), sonrakiler artımlı (~25 sn). |
 | `./build.sh <aşama>` | Tek aşama: `kernel busybox init axsh python axs axpkg initramfs iso` |
 | `./build.sh clean` | `build/` çıktılarını siler, `build/downloads/` korunur. |
 | `./run.sh` | Kernel + initramfs ile QEMU'da açar. Çıkış: `poweroff` ya da `Ctrl-a x`. |
