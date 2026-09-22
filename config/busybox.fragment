@@ -1,0 +1,9 @@
+# AxsOS BusyBox ayarları: defconfig üzerine uygulanır.
+CONFIG_STATIC=y
+# Yeni kernel başlıklarıyla derlenmiyor (CBQ kaldırıldı), gerek de yok:
+# CONFIG_TC is not set
+# musl'da bulunmayan / gereksiz parçalar:
+# CONFIG_FEATURE_MOUNT_NFS is not set
+# CONFIG_FEATURE_INETD_RPC is not set
+# CONFIG_SELINUX is not set
+# CONFIG_PAM is not set

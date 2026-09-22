@@ -10,7 +10,7 @@ kuruludur. Hedef: tek komutla derlenen, QEMU'da ve ISO olarak açılabilen bir s
 - GitHub Codespaces (Ubuntu), **KVM yok** → QEMU TCG (yazılım emülasyonu).
 - Test: `qemu-system-x86_64 -nographic` (seri konsol `ttyS0`).
 - Gerekli paketler:
-  `sudo apt-get install -y build-essential flex bison bc libelf-dev libssl-dev qemu-system-x86 cpio xz-utils`
+  `sudo apt-get install -y build-essential flex bison bc libelf-dev libssl-dev qemu-system-x86 cpio xz-utils rsync musl-tools grub-pc-bin grub-common xorriso mtools`
 
 ## Komutlar
 

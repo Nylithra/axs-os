@@ -50,4 +50,12 @@ configure_kernel
 log "Kernel derleniyor ($JOBS iş parçacığı)..."
 make -C "$KSRC" ARCH=x86_64 -j"$JOBS" bzImage
 cp "$KSRC/arch/x86/boot/bzImage" "$OUT/bzImage"
+
+# Kullanıcı alanı programları (musl) için kernel başlıkları
+if [ ! -f "$KHDR/.done-$KERNEL_VERSION" ]; then
+    log "Kernel başlıkları kuruluyor..."
+    rm -rf "$KHDR"
+    make -C "$KSRC" ARCH=x86_64 INSTALL_HDR_PATH="$KHDR" headers_install >/dev/null
+    touch "$KHDR/.done-$KERNEL_VERSION"
+fi
 log "Hazır: build/out/bzImage ($(du -h "$OUT/bzImage" | cut -f1))"

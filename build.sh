@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-STAGES=(kernel)
+STAGES=(kernel busybox initramfs)
 
 run_stage() { bash "scripts/build-$1.sh"; }
 
