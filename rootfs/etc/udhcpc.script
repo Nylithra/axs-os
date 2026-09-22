@@ -1,0 +1,12 @@
+#!/bin/sh
+# udhcpc olay betiği: adresi, varsayılan rotayı ve DNS'i ayarlar.
+case "$1" in
+    deconfig) ip -4 addr flush dev "$interface"; ip link set "$interface" up ;;
+    bound|renew)
+        ip -4 addr flush dev "$interface"
+        ip addr add "$ip/${mask:-24}" dev "$interface"
+        [ -n "$router" ] && ip route add default via ${router%% *} dev "$interface"
+        : > /etc/resolv.conf
+        for d in $dns; do echo "nameserver $d" >> /etc/resolv.conf; done ;;
+esac
+exit 0

@@ -13,11 +13,12 @@ log "Kök dosya sistemi hazırlanıyor..."
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 cp -a "$BUILD/busybox-install/." "$STAGE/"
+rm -f "$STAGE/linuxrc"
 mkdir -p "$STAGE"/{dev,proc,sys,tmp,run,root,home,etc,var/log,usr/lib,mnt}
 # Diğer aşamaların ürettiği dosyalar (init, axsh, axs, axpkg...)
-[ -d "$BUILD/sysroot" ] && cp -a "$BUILD/sysroot/." "$STAGE/"
+[ -d "$BUILD/sysroot" ] && cp -a --remove-destination "$BUILD/sysroot/." "$STAGE/"
 # Depodaki sabit dosyalar en son (üzerine yazar)
-cp -a "$ROOT/rootfs/." "$STAGE/"
+cp -a --remove-destination "$ROOT/rootfs/." "$STAGE/"
 
 # gen_init_cpio listesi: sahiplik her zaman root, aygıt düğümleri root gerektirmez.
 LIST="$BUILD/initramfs.list"

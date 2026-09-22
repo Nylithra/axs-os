@@ -1,7 +1,0 @@
-#!/bin/sh
-# Aşama 2 geçici init'i (Aşama 3'te C ile yazılan init ile değişecek)
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
-mount -t devtmpfs devtmpfs /dev
-echo "AxsOS (BusyBox) açıldı."
-exec setsid cttyhack /bin/sh
