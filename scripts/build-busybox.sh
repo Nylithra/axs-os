@@ -33,7 +33,7 @@ if [ ! -f "$BSRC/.config" ] || [ "$FRAG" -nt "$BSRC/.config" ]; then
         sed -i "/^$opt=/d; /^# $opt is not set/d" "$BSRC/.config"
         echo "$line" >> "$BSRC/.config"
     done < "$FRAG"
-    yes "" | make -C "$BSRC" oldconfig >/dev/null
+    { yes "" || true; } | make -C "$BSRC" oldconfig >/dev/null
 fi
 
 CC="$(axs_cc)"
