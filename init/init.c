@@ -5,7 +5,8 @@
  * - hostname'i "axsos" yapar
  * - AxsOS açılış logosunu basar
  * - /etc/rc varsa çalıştırır (ağ vb. açılış işleri)
- * - konsolda shell başlatır (/bin/axsh, yoksa /bin/sh); shell kapanınca yeniden açar
+ * - her etkin konsolda (ör. ekran tty1 + seri ttyS0) logo basıp shell başlatır
+ *   (/bin/axsh, yoksa /bin/sh); shell kapanınca yeniden açar
  * - yetim süreçleri toplar
  * - poweroff / reboot / halt sinyallerini işler (BusyBox ile uyumlu:
  *   SIGUSR2 = kapat, SIGTERM = yeniden başlat, SIGUSR1 = durdur)
@@ -31,6 +32,14 @@
 #define CONSOLE  "/dev/console"
 
 static const char *SHELLS[] = { "/bin/axsh", "/bin/sh", NULL };
+
+#define MAX_TTYS 4
+static struct {
+    char dev[64];
+    pid_t pid;
+    time_t last_spawn;
+} ttys[MAX_TTYS];
+static int nttys;
 
 static volatile sig_atomic_t shutdown_req; /* 0 veya RB_* komutu */
 
@@ -169,7 +178,33 @@ static void run_rc(void)
         ;
 }
 
-static pid_t spawn_shell(void)
+/* Etkin konsolları bul: "tty0 ttyS0" -> /dev/tty1, /dev/ttyS0 */
+static void find_consoles(void)
+{
+    char buf[256] = "";
+    FILE *f = fopen("/sys/class/tty/console/active", "r");
+    if (f) {
+        if (!fgets(buf, sizeof buf, f))
+            buf[0] = 0;
+        fclose(f);
+    }
+    for (char *t = strtok(buf, " \n"); t && nttys < MAX_TTYS; t = strtok(NULL, " \n")) {
+        char dev[64];
+        /* tty0 "şu anki sanal konsol" demektir; ilk sanal konsolu kullan */
+        snprintf(dev, sizeof dev, "/dev/%s", strcmp(t, "tty0") ? t : "tty1");
+        if (access(dev, R_OK | W_OK) != 0)
+            continue;
+        snprintf(ttys[nttys].dev, sizeof ttys[nttys].dev, "%s", dev);
+        ttys[nttys++].pid = -1;
+    }
+    if (!nttys) {
+        snprintf(ttys[0].dev, sizeof ttys[0].dev, "%s", CONSOLE);
+        ttys[0].pid = -1;
+        nttys = 1;
+    }
+}
+
+static pid_t spawn_shell(const char *tty)
 {
     const char *sh = NULL;
     for (int i = 0; SHELLS[i]; i++)
@@ -186,7 +221,7 @@ static pid_t spawn_shell(void)
         child_reset();
         setsid();
         /* Konsolu kontrol terminali yap ki Ctrl-C çalışsın. */
-        int fd = open(CONSOLE, O_RDWR);
+        int fd = open(tty, O_RDWR);
         if (fd >= 0) {
             ioctl(fd, TIOCSCTTY, 1);
             dup2(fd, 0);
@@ -196,6 +231,7 @@ static pid_t spawn_shell(void)
                 close(fd);
         }
         tcsetpgrp(0, getpid());
+        print_logo();
         setenv("SHELL", sh, 1);
         chdir("/root");
         const char *base = strrchr(sh, '/') + 1;
@@ -237,35 +273,33 @@ int main(void)
     setup_signals();
     default_env();
     set_hostname();
-    print_logo();
     run_rc();
+    find_consoles();
 
-    pid_t shell = -1;
-    time_t last_spawn = 0;
     for (;;) {
         if (shutdown_req)
             shutdown_system(shutdown_req);
-        if (shell <= 0) {
-            /* Shell çok hızlı ölüyorsa (ör. bozuk) CPU'yu yakma. */
-            if (time(NULL) - last_spawn < 2)
-                sleep(2);
-            last_spawn = time(NULL);
-            shell = spawn_shell();
-            if (shell < 0) {
-                sleep(5);
+        for (int i = 0; i < nttys; i++) {
+            if (ttys[i].pid > 0)
                 continue;
-            }
+            /* Shell çok hızlı ölüyorsa (ör. bozuk) CPU'yu yakma. */
+            if (time(NULL) - ttys[i].last_spawn < 2)
+                sleep(2);
+            ttys[i].last_spawn = time(NULL);
+            ttys[i].pid = spawn_shell(ttys[i].dev);
         }
         int st;
         pid_t pid = wait(&st);
         if (pid < 0) {
             if (errno == ECHILD)
-                shell = -1;
+                sleep(1);
             continue; /* EINTR: sinyal geldi, döngü başında kontrol et */
         }
-        if (pid == shell) {
-            msg("Shell kapandı, yeniden başlatılıyor...");
-            shell = -1;
-        }
+        for (int i = 0; i < nttys; i++)
+            if (pid == ttys[i].pid) {
+                ttys[i].pid = -1;
+                if (!shutdown_req)
+                    msg("%s üzerindeki shell kapandı, yeniden başlatılıyor...", ttys[i].dev);
+            }
     }
 }
