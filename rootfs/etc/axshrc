@@ -1,0 +1,4 @@
+# axsh sistem geneli başlangıç dosyası (etkileşimli oturumlarda okunur)
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export EDITOR=vi
+export PAGER=less

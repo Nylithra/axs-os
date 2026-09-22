@@ -10,4 +10,4 @@ TOTAL=$(( BOOT_WAIT + (${#@} + 3) * CMD_WAIT + 10 ))
     sleep "$BOOT_WAIT"
     for c in "$@"; do printf '%s\n' "$c"; sleep "$CMD_WAIT"; done
     sleep 3
-} | TIMEOUT="$TOTAL" ./run.sh 2>&1 | tr -d '\r' | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g'
+} | TIMEOUT="$TOTAL" ./run.sh 2>&1 | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\r$//; s/.*\r//'

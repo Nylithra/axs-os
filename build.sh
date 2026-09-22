@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-STAGES=(kernel busybox init initramfs)
+STAGES=(kernel busybox init axsh initramfs)
 
 run_stage() { bash "scripts/build-$1.sh"; }
 

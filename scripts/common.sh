@@ -23,6 +23,8 @@ axs_cc() {
     mkdir -p "$TOOLS"
     cat > "$TOOLS/axs-cc" <<EOC
 #!/bin/sh
+# glibc gcc'nin "x86_64-linux-gnu" multiarch cevabı musl hedefiyle çelişir (CPython configure)
+[ "\$1" = "--print-multiarch" ] && exit 0
 exec musl-gcc -isystem "$KHDR/include" "\$@"
 EOC
     chmod +x "$TOOLS/axs-cc"
