@@ -29,8 +29,19 @@ if [ ! -f "$DEPS/lib/libssl.a" ]; then
     log "OpenSSL derleniyor (birkaç dakika)..."
     ( cd "$BUILD/openssl-$OPENSSL_VERSION" \
       && CC="$CC" ./Configure linux-x86_64 no-shared no-module no-tests no-docs no-apps \
-            no-async -static --prefix="$DEPS" --libdir=lib --openssldir=/etc/ssl >/dev/null \
-      && make -j"$JOBS" build_sw >/dev/null && make install_sw >/dev/null )
+            no-async threads --prefix="$DEPS" --libdir=lib --openssldir=/etc/ssl >/dev/null \
+      && make -j"$JOBS" build_sw >/dev/null && make install_sw >/dev/null 2>&1 )
+fi
+
+# --- SQLite ---
+if [ ! -f "$DEPS/lib/libsqlite3.a" ]; then
+    git_src "$BUILD/sqlite-$SQLITE_VERSION" https://github.com/sqlite/sqlite "version-$SQLITE_VERSION"
+    log "SQLite derleniyor..."
+    ( cd "$BUILD/sqlite-$SQLITE_VERSION" && CC="$CC" CFLAGS="-O2 -fPIC" ./configure --disable-shared \
+            --disable-tcl --disable-readline --prefix="$DEPS" >/dev/null \
+      && make -j"$JOBS" libsqlite3.a sqlite3.h >/dev/null \
+      && install -D -m644 libsqlite3.a "$DEPS/lib/libsqlite3.a" \
+      && install -D -m644 sqlite3.h "$DEPS/include/sqlite3.h" ) || die "SQLite derlenemedi"
 fi
 
 # --- CPython ---
@@ -42,10 +53,11 @@ if [ ! -f "$PYSRC/python" ]; then
     MODULE_BUILDTYPE=static CC="$CC" \
     CPPFLAGS="-I$DEPS/include" LDFLAGS="-static -L$DEPS/lib" \
     ZLIB_CFLAGS="-I$DEPS/include" ZLIB_LIBS="-L$DEPS/lib -lz" \
+    LIBSQLITE3_CFLAGS="-I$DEPS/include" LIBSQLITE3_LIBS="-L$DEPS/lib -lsqlite3 -lm" \
     ./configure --prefix=/usr --disable-shared --disable-test-modules \
         --without-ensurepip --without-system-libmpdec --without-system-expat \
         --with-openssl="$DEPS" --with-openssl-rpath=no \
-        py_cv_module__ctypes=n/a py_cv_module__sqlite3=n/a py_cv_module__tkinter=n/a \
+        py_cv_module__ctypes=n/a py_cv_module__tkinter=n/a \
         py_cv_module__curses=n/a py_cv_module__curses_panel=n/a py_cv_module_readline=n/a \
         py_cv_module__dbm=n/a py_cv_module__gdbm=n/a py_cv_module__bz2=n/a py_cv_module__lzma=n/a \
         py_cv_module__uuid=n/a py_cv_module_nis=n/a \
@@ -63,7 +75,7 @@ LIB="$PYI/usr/lib/python${PYTHON_VERSION%.*}"
 # Gömülü sistem için gereksiz parçaları at
 rm -rf "$LIB"/{test,idlelib,tkinter,turtledemo,ensurepip,lib2to3,pydoc_data,venv} \
        "$LIB"/config-* "$PYI/usr/include" "$PYI/usr/share" "$PYI/usr/lib/pkgconfig" \
-       "$PYI/usr/bin/idle"* "$PYI/usr/bin/pydoc"* "$PYI/usr/bin/"*-config
+       "$PYI/usr/bin/idle"* "$PYI/usr/lib/libpython"*.a "$PYI/usr/bin/pydoc"* "$PYI/usr/bin/"*-config
 find "$LIB" -name __pycache__ -prune -exec rm -rf {} +
 find "$LIB" -name 'tests' -type d -prune -exec rm -rf {} +
 strip "$PYI/usr/bin/python${PYTHON_VERSION%.*}"
