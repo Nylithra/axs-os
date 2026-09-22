@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD="$ROOT/build"
+# AXSOS_BUILD ile derleme klasörü değiştirilebilir (ör. disk kotası dar ortamlarda)
+BUILD="$(mkdir -p "${AXSOS_BUILD:-$ROOT/build}" && cd "${AXSOS_BUILD:-$ROOT/build}" && pwd)"
 DL="$BUILD/downloads"
 OUT="$BUILD/out"
 JOBS="${JOBS:-$(nproc)}"

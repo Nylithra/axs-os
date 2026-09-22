@@ -11,12 +11,16 @@ if [ ! -d "$BSRC" ]; then
             "https://busybox.net/downloads/busybox-$BUSYBOX_VERSION.tar.bz2"; then
         rm -f "$TARBALL.part"
         log "busybox.net erişilemedi, GitHub aynasından klonlanıyor..."
+        rm -rf "$BSRC.part"
         git -c advice.detachedHead=false clone -q --depth 1 --branch "${BUSYBOX_VERSION//./_}" \
-            https://github.com/mirror/busybox.git "$BSRC"
-        rm -rf "$BSRC/.git"
+            https://github.com/mirror/busybox.git "$BSRC.part"
+        rm -rf "$BSRC.part/.git"
+        mv "$BSRC.part" "$BSRC"
     else
         [ -f "$TARBALL.part" ] && mv "$TARBALL.part" "$TARBALL"
-        tar -C "$BUILD" -xf "$TARBALL"
+        rm -rf "$BSRC.part" && mkdir -p "$BSRC.part"
+        tar -C "$BSRC.part" --strip-components=1 -xf "$TARBALL"
+        mv "$BSRC.part" "$BSRC"
     fi
 fi
 

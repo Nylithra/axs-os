@@ -8,14 +8,15 @@ BIOS/UEFI ile açılan bir ISO olarak çalışır.
 
 ## Ortam
 
-- GitHub Codespaces (Ubuntu), **KVM yok** → QEMU TCG (yazılım emülasyonu).
+- GitHub Codespaces veya Google Cloud Shell (Debian/Ubuntu), **KVM yok** → QEMU TCG.
 - Test: `qemu-system-x86_64 -nographic` (seri konsol `ttyS0`).
-- Gerekli paketler:
-  ```
-  sudo apt-get install -y build-essential flex bison bc libelf-dev libssl-dev rsync \
-      cpio xz-utils musl-tools qemu-system-x86 grub-pc-bin grub-efi-amd64-bin \
-      grub-common xorriso mtools ovmf
-  ```
+- Gerekli paketler: **`./build.sh deps`** eksikleri `apt-get` ile kurar.
+  `./build.sh` her çalıştığında önce `scripts/deps.sh` ile denetler, eksik varsa
+  derlemeye başlamadan durur. Liste `scripts/deps.sh` içinde.
+- **Google Cloud Shell**: yalnızca `$HOME` (5 GB) kalıcıdır; apt ile kurulan paketler
+  oturum yenilenince silinir → her yeni oturumda önce `./build.sh deps`.
+  `build/` ~3 GB tutar; ev dizini dolarsa derleme klasörünü taşıyın:
+  `export AXSOS_BUILD=/tmp/axsos-build` (geçicidir, oturumla silinir).
 
 ## Komutlar
 
@@ -23,6 +24,8 @@ BIOS/UEFI ile açılan bir ISO olarak çalışır.
 |---|---|
 | `./build.sh` | Her şeyi sırayla derler (indirme dahil). İlk derleme ~8 dk (4 çekirdek), sonrakiler artımlı (~25 sn). |
 | `./build.sh <aşama>` | Tek aşama: `kernel busybox init axsh python axs axpkg initramfs iso` |
+| `./build.sh deps` | Eksik derleme paketlerini kurar (sudo apt-get). |
+| `AXSOS_BUILD=/yol ./build.sh` | Derleme klasörünü değiştirir (`run.sh` de aynı değişkeni okur). |
 | `./build.sh clean` | `build/` çıktılarını siler, `build/downloads/` korunur. |
 | `./run.sh` | Kernel + initramfs ile QEMU'da açar. Çıkış: `poweroff` ya da `Ctrl-a x`. |
 | `./run.sh iso` | ISO'yu GRUB ile açar (BIOS). |

@@ -12,7 +12,9 @@ mkdir -p "$DEPS"
 git_src() {
     [ -d "$1" ] && return
     log "$(basename "$1") indiriliyor..."
-    git -c advice.detachedHead=false clone -q --depth 1 --branch "$3" "$2" "$1"
+    rm -rf "$1.part"
+    git -c advice.detachedHead=false clone -q --depth 1 --branch "$3" "$2" "$1.part"
+    mv "$1.part" "$1"
 }
 
 # --- zlib ---

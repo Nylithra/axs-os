@@ -14,23 +14,30 @@ fetch_kernel() {
             "https://cdn.kernel.org/pub/linux/kernel/v$KMAJOR.x/linux-$KERNEL_VERSION.tar.xz"; then
             rm -f "$TARBALL.part"
             log "kernel.org erişilemedi, GitHub aynasından (gregkh/linux) klonlanıyor..."
-            git clone --depth 1 --branch "v$KERNEL_VERSION" \
-                https://github.com/gregkh/linux.git "$KSRC"
-            rm -rf "$KSRC/.git"
+            rm -rf "$KSRC.part"
+            git -c advice.detachedHead=false clone -q --depth 1 --branch "v$KERNEL_VERSION" \
+                https://github.com/gregkh/linux.git "$KSRC.part"
+            rm -rf "$KSRC.part/.git"
+            mv "$KSRC.part" "$KSRC"
             return
         fi
         mv "$TARBALL.part" "$TARBALL"
     fi
     log "Arşiv açılıyor..."
-    tar -C "$BUILD" -xf "$TARBALL"
+    # Yarıda kalan açma işlemi bozuk kaynak ağacı bırakmasın
+    rm -rf "$KSRC.part" && mkdir -p "$KSRC.part"
+    tar -C "$KSRC.part" --strip-components=1 -xf "$TARBALL"
+    mv "$KSRC.part" "$KSRC"
 }
 
 configure_kernel() {
     local frag="$ROOT/config/kernel.fragment"
-    # Reconfigure only when the fragment changed.
-    if [ -f "$KSRC/.config" ] && [ "$KSRC/.config" -nt "$frag" ]; then
+    # Yalnızca fragment değiştiyse ya da önceki yapılandırma yarıda kaldıysa yeniden yapılandır.
+    local stamp="$KSRC/.axsos-configured"
+    if [ -f "$stamp" ] && [ "$stamp" -nt "$frag" ]; then
         return
     fi
+    rm -f "$stamp"
     log "Kernel yapılandırılıyor (tinyconfig + config/kernel.fragment)..."
     make -C "$KSRC" ARCH=x86_64 tinyconfig >/dev/null
     "$KSRC/scripts/kconfig/merge_config.sh" -m -O "$KSRC" "$KSRC/.config" "$frag" >/dev/null
@@ -43,6 +50,7 @@ configure_kernel() {
         grep -qxF "$line" "$KSRC/.config" || { log "UYARI: uygulanamadı: $line"; missing=1; }
     done < "$frag"
     [ "$missing" = 0 ] || log "Bazı seçenekler uygulanamadı (yukarıya bakın)."
+    touch "$stamp"
 }
 
 fetch_kernel

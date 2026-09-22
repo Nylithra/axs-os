@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-OUT=build/out
+OUT="${AXSOS_BUILD:-build}/out"
 MODE="${1:-kernel}"
 ARGS=(-m "${MEM:-512M}" -nographic -no-reboot -nic user,model=e1000)
 [ -e /dev/kvm ] && [ -w /dev/kvm ] && ARGS+=(-enable-kvm -cpu host) || ARGS+=(-accel tcg)
