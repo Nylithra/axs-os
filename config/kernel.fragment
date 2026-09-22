@@ -1,0 +1,53 @@
+# AxsOS kernel config fragment.
+# Applied on top of `make tinyconfig`, then resolved with `make olddefconfig`.
+
+# --- Architecture ---
+CONFIG_64BIT=y
+CONFIG_SMP=y
+
+# --- Core ---
+CONFIG_PRINTK=y
+CONFIG_EARLY_PRINTK=y
+CONFIG_BUG=y
+CONFIG_MULTIUSER=y
+CONFIG_FUTEX=y
+CONFIG_EPOLL=y
+CONFIG_SIGNALFD=y
+CONFIG_TIMERFD=y
+CONFIG_EVENTFD=y
+CONFIG_SHMEM=y
+CONFIG_POSIX_TIMERS=y
+CONFIG_KALLSYMS=y
+CONFIG_NO_HZ_IDLE=y
+CONFIG_HIGH_RES_TIMERS=y
+
+# --- Executables ---
+CONFIG_BINFMT_ELF=y
+CONFIG_BINFMT_SCRIPT=y
+
+# --- initramfs ---
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_RD_GZIP=y
+
+# --- Filesystems ---
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+CONFIG_TMPFS=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+
+# --- Console: serial (QEMU -nographic) ---
+CONFIG_TTY=y
+CONFIG_UNIX98_PTYS=y
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+
+# --- Console: VGA text (for ISO boot on a screen) ---
+CONFIG_VT=y
+CONFIG_VT_CONSOLE=y
+CONFIG_VGA_CONSOLE=y
+
+# --- Bus / misc ---
+CONFIG_PCI=y
+CONFIG_RTC_CLASS=y
+CONFIG_RTC_DRV_CMOS=y
