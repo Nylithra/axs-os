@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "  merhaba paketi kuruldu. Denemek için: merhaba"

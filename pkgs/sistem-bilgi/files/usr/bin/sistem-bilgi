@@ -1,0 +1,10 @@
+#!/bin/sh
+# sistem-bilgi - AxsOS sistem özeti
+. /etc/os-release 2>/dev/null
+printf '\033[1;35m%s\033[0m\n' "${PRETTY_NAME:-AxsOS}"
+printf '  Çekirdek : %s\n' "$(uname -r)"
+printf '  Makine   : %s\n' "$(hostname)"
+printf '  Açık kalma: %s\n' "$(uptime | sed 's/.*up \([^,]*\),.*/\1/')"
+printf '  Bellek   : %s\n' "$(free -m | awk '/Mem/ {print $3 " / " $2 " MB"}')"
+printf '  Axs      : %s\n' "$(axs -s 2>/dev/null | head -1 || echo yok)"
+printf '  Paketler : %s kurulu\n' "$(ls /var/lib/axpkg/db 2>/dev/null | wc -l)"

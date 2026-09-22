@@ -1,0 +1,6 @@
+#!/usr/bin/env axs
+# merhaba - AxsOS'un ilk Axs paketi
+
+ad = "dünya"
+print: Merhaba ad;! AxsOS'tan selamlar.
+print: 6 x 7 = (6 * 7);

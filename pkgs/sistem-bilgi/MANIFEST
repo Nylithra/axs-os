@@ -1,0 +1,4 @@
+name=sistem-bilgi
+version=1.0
+description=Sistem bilgilerini gösteren araç (merhaba'ya bağımlı)
+depends=merhaba
