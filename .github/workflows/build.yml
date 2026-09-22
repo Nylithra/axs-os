@@ -1,0 +1,19 @@
+name: AxsOS ISO
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bagimliliklar
+        run: ./build.sh deps
+      - name: Derle
+        run: ./build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: axsos-iso
+          path: build/out/axsos.iso
+          compression-level: 0
