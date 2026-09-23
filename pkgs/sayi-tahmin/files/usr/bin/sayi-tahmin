@@ -1,0 +1,22 @@
+#!/usr/bin/env axs
+# sayi-tahmin - Axs ile yazılmış küçük bir oyun
+
+gizli = random(1, 50)
+hak = 7
+
+print: 1 ile 50 arasında bir sayı tuttum. hak; hakkın var!
+
+while hak > 0
+  tahmin = number(ask("Tahminin: "), 0)
+  hak -= 1
+  if tahmin == gizli
+    print: Tebrikler! Sayı gizli; idi.
+    exit(0)
+  elif tahmin < gizli
+    print: Daha büyük bir sayı dene. (hak; hak kaldı)
+  else
+    print: Daha küçük bir sayı dene. (hak; hak kaldı)
+  end
+end
+
+print: Hakların bitti. Sayı gizli; idi.

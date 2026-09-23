@@ -1,0 +1,16 @@
+#!/usr/bin/env axs
+# carpim-tablosu - 1'den 10'a çarpım tablosu
+
+print: Çarpım Tablosu
+print: ==============
+repeat 10 as i
+  satir = ""
+  repeat 10 as j
+    sayi = text(i * j)
+    while sayi.len() < 4
+      sayi = " " + sayi
+    end
+    satir = satir + sayi
+  end
+  print(satir)
+end

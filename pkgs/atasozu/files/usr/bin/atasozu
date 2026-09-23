@@ -1,0 +1,20 @@
+#!/usr/bin/env axs
+# atasozu - rastgele bir Türk atasözü
+
+sozler = [
+  "Damlaya damlaya göl olur.",
+  "Ağaç yaşken eğilir.",
+  "Sakla samanı, gelir zamanı.",
+  "Bugünün işini yarına bırakma.",
+  "Emek olmadan yemek olmaz.",
+  "Bin bilsen de bir bilene danış.",
+  "Tatlı dil yılanı deliğinden çıkarır.",
+  "Komşu komşunun külüne muhtaçtır.",
+  "Söz gümüşse sükût altındır.",
+  "Işık ol, yol göster."
+]
+
+soz = pick(sozler)
+print: 
+print:   « soz; »
+print: 
