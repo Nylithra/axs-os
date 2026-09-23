@@ -97,7 +97,7 @@ jobs:
           Giriş parolası yoktur; masaüstü kendiliğinden açılır. GRUB menüsünde metin kipi de vardır.
           EOF
 
-      - name: "Son sürüm" yayınını güncelle
+      - name: Son sürüm yayınını güncelle
         if: github.ref_type == 'branch'
         env:
           GH_TOKEN: ${{ github.token }}

@@ -35,6 +35,7 @@ Tek komutla derlenir; QEMU'da ve BIOS/UEFI ile açılan bir ISO olarak çalış�
 | `VERBOSE=1 ./run.sh` | Kernel mesajlarını göster (`quiet` kapalı). |
 | `APPEND="..." ./run.sh` / `MEM=1G ./run.sh` | Ek kernel parametresi / bellek (varsayılan 512M). |
 | `scripts/qemu-test.sh "cmd1" "cmd2"` | Otomatik test (metin): açar, komutları yazar, çıktıyı gösterir. `RUN_MODE=iso`, `BOOT_WAIT=20`, `CMD_WAIT=3` |
+| `scripts/ci-test.sh` | ISO açılış testi: metin kipinde axs/python/poweroff ve masaüstü ekran görüntüsü (CI da bunu çalıştırır). |
 | `scripts/qemu-gui.py wait:32 click:454,753 shot:/tmp/a.png` | Otomatik test (masaüstü): görüntüsüz QEMU + QMP; `click/dbl/drag/move/wheel/key/type/shot/wait`. `--iso` ile ISO'dan. Ekran 1280x800. |
 
 Aşama bağımlılıkları: `busybox/init/axsh/axpkg/axsde/python` → kernel başlıkları (`kernel`);
@@ -123,6 +124,14 @@ build/                    (git'e girmez)
   - Ayarlar `/etc/axsde.conf` (RAM'de; yeniden başlatınca sıfırlanır). Varsayılan saat dilimi UTC+3.
 - **ISO**: `grub-mkrescue` ile BIOS+UEFI hibrit. Menü: masaüstü (varsayılan),
   metin kipi, ayrıntılı, kurtarma (`rdinit=/bin/sh`). Konsol hem ekran (`tty0`) hem seri (`ttyS0`).
+
+## GitHub Actions (`.github/workflows/build.yml`)
+
+Her push'ta: `./build.sh deps` → `./build.sh` → `scripts/ci-test.sh` (ISO QEMU'da açılıp test
+edilir; başarısızsa yayın yapılmaz) → artifact (ISO, SHA256SUMS, ekran.png, seri günlük) →
+**Releases'te `son-surum`** ön sürümü güncellenir. `v*` etiketi gönderilince
+(`git tag v0.2 && git push origin v0.2`) kalıcı sürüm oluşur. `build/downloads` ve
+`build/deps` (statik zlib/OpenSSL/SQLite) `config/versions.sh` özetine göre önbelleklenir.
 
 ## İndirme kaynakları
 
