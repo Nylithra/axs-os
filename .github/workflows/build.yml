@@ -1,19 +1,116 @@
 name: AxsOS ISO
+
+# Her push'ta: derle -> ISO'yu QEMU'da açıp test et -> "son sürüm" yayınını güncelle.
+# "v*" etiketi gönderilince (ör. git tag v0.2 && git push --tags) kalıcı bir sürüm oluşur.
 on:
   push:
+    branches: ["**"]
+    tags: ["v*"]
   workflow_dispatch:
+
+permissions:
+  contents: write   # GitHub Releases'e ISO yüklemek için
+
+concurrency:
+  group: axsos-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  iso:
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - name: Bagimliliklar
+
+      - name: KVM'yi etkinleştir (testler hızlansın)
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+            sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+          fi
+          ls -l /dev/kvm || echo "KVM yok: yazılım emülasyonu kullanılacak"
+
+      - name: Bağımlılıklar
         run: ./build.sh deps
+
+      - name: Derleme önbelleği (indirilen kaynaklar ve statik Python)
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/downloads
+            build/deps
+          key: axsos-${{ hashFiles('config/versions.sh') }}
+
       - name: Derle
         run: ./build.sh
-      - uses: actions/upload-artifact@v4
+
+      - name: ISO açılış testi (metin + masaüstü)
+        run: scripts/ci-test.sh
+
+      - name: Sürüm bilgisi
+        id: info
+        run: |
+          cd build/out
+          sha256sum axsos.iso > SHA256SUMS
+          echo "size=$(du -h axsos.iso | cut -f1)" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Artifact olarak yükle
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: axsos-iso
-          path: build/out/axsos.iso
+          name: axsos-${{ steps.info.outputs.short || github.sha }}
+          path: |
+            build/out/axsos.iso
+            build/out/SHA256SUMS
+            build/out/ekran.png
+            build/out/test-seri.log
           compression-level: 0
+          if-no-files-found: ignore
+
+      - name: Sürüm notları
+        run: |
+          cat > build/out/NOTLAR.md <<EOF
+          ## AxsOS — Axs dilinin evi
+
+          Linux 6.12 LTS tabanlı, masaüstü (AxsDE), Axs dili, axsh kabuğu ve axpkg paket
+          yöneticisiyle gelen minimal dağıtım. Bu ISO derlendikten sonra QEMU'da açılıp
+          otomatik olarak test edildi (metin kipi + masaüstü).
+
+          - Commit: \`${{ steps.info.outputs.short }}\` · Tarih: ${{ steps.info.outputs.date }} · Boyut: ${{ steps.info.outputs.size }}
+          - BIOS ve UEFI ile açılır (hibrit ISO); USB belleğe doğrudan yazılabilir.
+
+          ### QEMU ile çalıştır
+          \`\`\`sh
+          qemu-system-x86_64 -m 1G -cdrom axsos.iso -device virtio-tablet-pci -device virtio-keyboard-pci
+          \`\`\`
+          (Linux'ta \`-enable-kvm\` eklemek çok hızlandırır.)
+
+          ### VirtualBox / VMware
+          Yeni sanal makine: Linux 64-bit, 1 GB bellek, disk gerekmez; ISO'yu CD olarak takıp başlat.
+
+          ### USB bellek
+          Linux: \`sudo dd if=axsos.iso of=/dev/sdX bs=4M status=progress\` ·
+          Windows: Rufus (DD kipi) ya da balenaEtcher.
+
+          Giriş parolası yoktur; masaüstü kendiliğinden açılır. GRUB menüsünde metin kipi de vardır.
+          EOF
+
+      - name: "Son sürüm" yayınını güncelle
+        if: github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete son-surum --yes --cleanup-tag 2>/dev/null || true
+          gh release create son-surum build/out/axsos.iso build/out/SHA256SUMS build/out/ekran.png \
+            --title "AxsOS son sürüm (${{ steps.info.outputs.short }})" \
+            --notes-file build/out/NOTLAR.md --prerelease --target "$GITHUB_SHA"
+
+      - name: Etiketli sürüm yayınla
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" build/out/axsos.iso build/out/SHA256SUMS build/out/ekran.png \
+            --title "AxsOS $GITHUB_REF_NAME" --notes-file build/out/NOTLAR.md
