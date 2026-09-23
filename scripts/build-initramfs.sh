@@ -19,6 +19,14 @@ mkdir -p "$STAGE"/{dev,proc,sys,tmp,run,root,home,etc,var/log,usr/lib,mnt}
 [ -d "$BUILD/sysroot" ] && cp -a --remove-destination "$BUILD/sysroot/." "$STAGE/"
 # Depodaki sabit dosyalar en son (üzerine yazar)
 cp -a --remove-destination "$ROOT/rootfs/." "$STAGE/"
+# Hazır kurulu market uygulamaları: axpkg sahte kökle (AXPKG_ROOT) kurar, veritabanı da güncellenir
+PRE="$STAGE/var/lib/axpkg/repo/PREINSTALL"
+if [ -f "$PRE" ]; then
+    for p in $(cat "$PRE"); do
+        AXPKG_ROOT="$STAGE" "$STAGE/usr/bin/axpkg" install "$p" >/dev/null || die "hazır kurulamadı: $p"
+    done
+    log "Hazır kurulu uygulamalar: $(cat "$PRE")"
+fi
 
 # gen_init_cpio listesi: sahiplik her zaman root, aygıt düğümleri root gerektirmez.
 LIST="$BUILD/initramfs.list"

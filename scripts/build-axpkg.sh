@@ -9,11 +9,29 @@ log "axpkg derleniyor..."
 "$CC" -static -Os -Wall -Wextra -Werror -Wno-format-truncation -o "$SYS/usr/bin/axpkg" "$ROOT/axpkg/axpkg.c"
 strip "$SYS/usr/bin/axpkg"
 
-# Örnek paketleri oluştur (host'ta da derlenmiş statik axpkg çalışır)
-rm -f "$SYS/var/lib/axpkg/repo/"*.axp
-for d in "$ROOT"/pkgs/*/; do
+# Depo: pkgs/ (terminal paketleri) + build/pkgs/ (apps aşamasının grafik uygulamaları)
+REPO="$SYS/var/lib/axpkg/repo"
+rm -rf "$REPO" && mkdir -p "$REPO/icons"
+INDEX="$REPO/INDEX"
+: > "$INDEX"
+for d in "$ROOT"/pkgs/*/ "$BUILD"/pkgs/*/; do
     [ -f "$d/MANIFEST" ] || continue
-    ( cd "$SYS/var/lib/axpkg/repo" && "$SYS/usr/bin/axpkg" create "$d" >/dev/null ) \
+    ( cd "$REPO" && "$SYS/usr/bin/axpkg" create "$d" >/dev/null ) \
         || die "paket oluşturulamadı: $d"
+    name="$(sed -n 's/^name=//p' "$d/MANIFEST")"
+    ver="$(sed -n 's/^version=//p' "$d/MANIFEST")"
+    file="$name-$ver.axp"
+    # Market bu dizini okur: MANIFEST alanları + dosya adı, boyutlar; kayıtlar boş satırla ayrılır
+    {
+        grep -v '^$' "$d/MANIFEST"
+        echo "file=$file"
+        echo "size=$(stat -c %s "$REPO/$file")"
+        echo "installed_size=$(du -sb "$d/files" | cut -f1)"
+        echo
+    } >> "$INDEX"
+    [ -f "$BUILD/icons/$name.png" ] && cp "$BUILD/icons/$name.png" "$REPO/icons/"
 done
-log "Hazır: /usr/bin/axpkg + $(ls "$SYS/var/lib/axpkg/repo" | wc -l) depo paketi"
+log "Hazır: /usr/bin/axpkg + $(ls "$REPO"/*.axp | wc -l) depo paketi (INDEX + simgeler)"
+
+# Hazır kurulu gelenler (initramfs aşaması kurar)
+echo "hesap-makinesi saat resim-gorucu" > "$REPO/PREINSTALL"

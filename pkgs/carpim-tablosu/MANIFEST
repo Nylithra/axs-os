@@ -1,3 +1,7 @@
 name=carpim-tablosu
 version=1.0
-description=Renkli çarpım tablosu (Axs ile yazıldı)
+description=Çarpım tablosu (Axs ile yazıldı)
+title=Çarpım Tablosu
+category=Axs
+run=carpim-tablosu
+about=1’den 10’a kadar çarpım tablosunu terminalde çizer. Axs döngüleri ile yazılmıştır.

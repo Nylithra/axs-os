@@ -28,6 +28,8 @@ grep -q "AxsOS CI 42" "$OUT/test-seri.log" || { tail -40 "$OUT/test-seri.log"; f
 ok "axs çalışıyor"
 grep -q "python-ok" "$OUT/test-seri.log" || { tail -40 "$OUT/test-seri.log"; fail "python (ssl/sqlite3/zlib) çalışmadı"; }
 ok "python + ssl + sqlite3 + zlib"
+grep -q "hesap-makinesi" "$OUT/test-seri.log" || { tail -40 "$OUT/test-seri.log"; fail "hazır kurulu market uygulamaları yok"; }
+ok "market deposu ve hazır kurulu uygulamalar"
 grep -q "Power down\|Sistem kapatılıyor" "$OUT/test-seri.log" || fail "poweroff çalışmadı"
 ok "poweroff"
 

@@ -106,6 +106,10 @@ uint32_t utf8_next(const char **p);
 int  utf8_prev(const char *s, int pos);
 int  utf8_len(uint32_t cp);
 int  utf8_put(char *out, uint32_t cp);
+/* Türkçe duyarsız arama (ui.c) */
+void text_fold(const char *in, char *out, size_t n);
+int  text_match(const char *hay, const char *needle);
+int  text_prefix(const char *hay, const char *needle);
 
 /* ------------------------------------------------------------------ */
 /* Tema                                                                */
@@ -165,6 +169,7 @@ extern const char *LAYOUT_NAMES[];
 /* ------------------------------------------------------------------ */
 
 typedef struct Win Win;
+struct AppEntry;
 typedef struct App App;
 
 struct App {
@@ -203,12 +208,46 @@ struct Win {
     Rect dmg;           /* çizimde değişen içerik bölgesi (boşsa tamamı) */
     Surf chrome;        /* önbelleğe alınmış başlık çubuğu */
     uint32_t chrome_key;/* önbelleğin hangi duruma ait olduğu */
+    char app_name[64];  /* üst çubuk/dock'ta görünen ad (dış uygulamalar için) */
+    const struct AppEntry *entry; /* uygulama kaydı (varsa) */
 };
+
+/* ------------------------------------------------------------------ */
+/* Uygulama kaydı (apps.c): yerleşik + /usr/share/axsde/apps/ *.app     */
+/* ------------------------------------------------------------------ */
+
+typedef struct AppEntry {
+    char id[64], name[64], desc[160], category[32];
+    char exec[256], icon[256], exts[64];   /* exts: "png,jpg" gibi açabildiği dosyalar */
+    const App *builtin;                    /* yerleşikse */
+} AppEntry;
+
+#define APPS_DIR "/usr/share/axsde/apps"
+extern AppEntry APPS[];
+extern int n_apps;
+void apps_scan(void);
+AppEntry *apps_find(const char *id);
+AppEntry *apps_for_file(const char *path);
+int  app_launch(const AppEntry *a, const char *arg);
+void app_draw_icon(Surf *s, const AppEntry *a, int x, int y, int size);
+void win_draw_icon(Surf *s, Win *w, int x, int y, int size);
+const char *win_app_name(Win *w);
+
+/* PNG simgeler (img.c, stb_image) */
+const Surf *icon_png(const char *path, int size);   /* ölçeklenmiş, önbellekli; alfa üst baytta */
+int  img_load(const char *path, Surf *out);         /* ARGB (alfa üst baytta); 0 = tamam */
+void blit_alpha(Surf *dst, int x, int y, const Surf *src);
+
+/* Dış uygulamalar (ext.c, ADP protokolü) */
+extern const App APP_EXTERNAL;
+int  ext_init(void);
+int  ext_fds(int *fds, int max);
+void ext_io(int fd);
+Win *wm_open_sized(const App *app, const char *arg, int cw, int ch);
+void wm_resize_content(Win *w, int cw, int ch);
 
 extern const App APP_TERMINAL, APP_FILES, APP_STUDIO, APP_PACKAGES,
                  APP_MONITOR, APP_SETTINGS, APP_ABOUT;
-extern const App *ALL_APPS[];
-extern int N_APPS;
 
 Win *wm_open(const App *app, const char *arg);
 Win *wm_find(const App *app);

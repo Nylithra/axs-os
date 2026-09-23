@@ -1,3 +1,7 @@
 name=atasozu
 version=1.0
 description=Her çalıştırıldığında rastgele bir Türk atasözü söyler (Axs)
+title=Atasözü
+category=Axs
+run=atasozu
+about=Her çalıştırıldığında rastgele bir Türk atasözü söyler. Axs ile liste ve rastgele sayı kullanımına güzel bir örnek.

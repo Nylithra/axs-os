@@ -1,3 +1,7 @@
 name=sayi-tahmin
 version=1.1
 description=1 ile 50 arasında sayı tahmin oyunu (Axs)
+title=Sayı Tahmin
+category=Oyunlar
+run=sayi-tahmin
+about=Bilgisayar 1 ile 50 arasında bir sayı tutar, sen de en az denemede bulmaya çalışırsın. Terminalde oynanır.

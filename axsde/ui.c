@@ -374,3 +374,44 @@ int read_file(const char *path, char *buf, size_t n)
     buf[r] = 0;
     return (int)r;
 }
+
+/* Arama için metni sadeleştir: küçük harf, Türkçe harfler ASCII karşılığına (ı/İ→i, ş→s, ğ→g, ü→u, ö→o, ç→c).
+ * Böylece "takvim", "takvım" ve "TAKVİM" aynı sonucu verir. */
+void text_fold(const char *in, char *out, size_t n)
+{
+    size_t o = 0;
+    while (*in && o + 5 < n) {
+        uint32_t cp = utf8_next(&in);
+        if (cp >= 'A' && cp <= 'Z')
+            cp += 32;
+        switch (cp) {
+        case 0x131: case 0x130: case 0xCE: case 0xEE: cp = 'i'; break; /* ı İ Î î */
+        case 0x15F: case 0x15E: cp = 's'; break;
+        case 0x11F: case 0x11E: cp = 'g'; break;
+        case 0xFC: case 0xDC: case 0xFB: case 0xDB: cp = 'u'; break;
+        case 0xF6: case 0xD6: cp = 'o'; break;
+        case 0xE7: case 0xC7: cp = 'c'; break;
+        case 0xE2: case 0xC2: cp = 'a'; break;
+        }
+        o += utf8_put(out + o, cp);
+    }
+    out[o] = 0;
+}
+
+int text_match(const char *hay, const char *needle)
+{
+    char h[512], q[256];
+    text_fold(needle, q, sizeof q);
+    if (!q[0])
+        return 1;
+    text_fold(hay, h, sizeof h);
+    return strstr(h, q) != NULL;
+}
+
+int text_prefix(const char *hay, const char *needle)
+{
+    char h[512], q[256];
+    text_fold(needle, q, sizeof q);
+    text_fold(hay, h, sizeof h);
+    return q[0] && !strncmp(h, q, strlen(q));
+}

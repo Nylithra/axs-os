@@ -2,3 +2,7 @@ name=sistem-bilgi
 version=1.0
 description=Sistem bilgilerini gösteren araç (merhaba'ya bağımlı)
 depends=merhaba
+title=Sistem Bilgisi
+category=Sistem
+run=sistem-bilgi
+about=Çekirdek sürümü, makine adı, açık kalma süresi, bellek, Axs sürümü ve kurulu paket sayısı gibi sistem bilgilerini renkli bir özet halinde gösterir. merhaba paketine bağımlıdır; Market bağımlılığı otomatik kurar.

@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -30,9 +31,6 @@
 #define MAX_WINS   24
 #define MAX_DMG    24
 
-const App *ALL_APPS[] = { &APP_TERMINAL, &APP_FILES, &APP_STUDIO, &APP_PACKAGES,
-                          &APP_MONITOR, &APP_SETTINGS, &APP_ABOUT };
-int N_APPS = (int)(sizeof ALL_APPS / sizeof ALL_APPS[0]);
 
 int wallpaper_idx;
 int tz_offset_min = 180; /* Türkiye: UTC+3 */
@@ -62,6 +60,28 @@ static int dock_hover = -1;
 static const App *DOCK[] = { &APP_TERMINAL, &APP_FILES, &APP_STUDIO, &APP_PACKAGES,
                              &APP_MONITOR, &APP_SETTINGS, &APP_ABOUT };
 #define N_DOCK ((int)(sizeof DOCK / sizeof DOCK[0]))
+typedef struct { const App *builtin; Win *win; } DockItem;
+static DockItem ditems[N_DOCK + 12];
+static int ndock;
+
+/* Dock öğeleri: sabit yerleşikler + çalışan dış uygulamalar (her uygulamadan bir) */
+static void dock_build(void)
+{
+    ndock = 0;
+    for (int i = 0; i < N_DOCK; i++)
+        ditems[ndock++] = (DockItem){ DOCK[i], NULL };
+    for (int i = 0; i < nwins && ndock < N_DOCK + 12; i++) {
+        Win *w = wins[i];
+        if (w->app != &APP_EXTERNAL)
+            continue;
+        int dup = 0;
+        for (int k = N_DOCK; k < ndock; k++)
+            if (ditems[k].win->entry && w->entry && !strcmp(ditems[k].win->entry->id, w->entry->id))
+                dup = 1;
+        if (!dup)
+            ditems[ndock++] = (DockItem){ NULL, w };
+    }
+}
 
 /* başlatıcı */
 static int launcher_open;
@@ -125,9 +145,16 @@ static Rect work_area(void)
     return (Rect){ 0, BAR_H, SCREEN_W, SCREEN_H - BAR_H - DOCK_H - 8 };
 }
 
+static int dock_x(int i)
+{
+    /* dış uygulamalardan önce ayraç için boşluk */
+    return DOCK_PAD + 10 + i * (DOCK_ICON + 12) + (i >= N_DOCK ? 14 : 0);
+}
+
 static Rect dock_rect(void)
 {
-    int w = N_DOCK * (DOCK_ICON + 12) + 2 * DOCK_PAD - 12 + 20;
+    dock_build();
+    int w = dock_x(ndock) + DOCK_PAD - 2;
     return (Rect){ (SCREEN_W - w) / 2, SCREEN_H - DOCK_H - 8, w, DOCK_H };
 }
 
@@ -278,6 +305,9 @@ static void damage_win(Win *w) { wm_damage(win_outer(w)); }
 
 static void damage_bar(void) { wm_damage((Rect){ 0, 0, SCREEN_W, BAR_H }); }
 
+/* Dock genişliği değişebilir: alt şeridin tamamını yenile */
+static void damage_dock(void) { wm_damage((Rect){ 0, SCREEN_H - DOCK_H - 70, SCREEN_W, DOCK_H + 70 }); }
+
 /* Dikdörtgenin yalnızca kenar şeritlerini hasarla (içini yeniden çizme) */
 static void damage_outline(Rect r)
 {
@@ -310,7 +340,7 @@ void wm_focus(Win *w)
     w->dirty = 1;
     damage_win(w);
     damage_bar();
-    wm_damage(dock_rect());
+    damage_dock();
 }
 
 void wm_win_dirty(Win *w) { w->dirty = 1; }
@@ -341,6 +371,16 @@ static void win_resize(Win *w, int cw, int ch)
 
 Win *wm_open(const App *app, const char *arg)
 {
+    return wm_open_sized(app, arg, app->w, app->h);
+}
+
+void wm_resize_content(Win *w, int cw, int ch)
+{
+    win_resize(w, cw, ch);
+}
+
+Win *wm_open_sized(const App *app, const char *arg, int req_w, int req_h)
+{
     if (app->single) {
         Win *e = wm_find(app);
         if (e) {
@@ -359,7 +399,7 @@ Win *wm_open(const App *app, const char *arg)
     w->min_w = 320;
     w->min_h = 200;
     Rect wa = work_area();
-    int cw = mini(app->w, wa.w - 40), ch = mini(app->h, wa.h - TITLE_H - 20);
+    int cw = mini(req_w, wa.w - 40), ch = mini(req_h, wa.h - TITLE_H - 20);
     /* basamaklı yerleşim */
     int off = (nwins % 6) * 32;
     int x = (SCREEN_W - cw) / 2 - 80 + off;
@@ -396,7 +436,7 @@ void wm_close(Win *w)
         damage_win(f);
     }
     damage_bar();
-    wm_damage(dock_rect());
+    damage_dock();
 }
 
 static void toggle_max(Win *w)
@@ -434,7 +474,7 @@ static void minimize(Win *w)
         damage_win(f);
     }
     damage_bar();
-    wm_damage(dock_rect());
+    damage_dock();
 }
 
 static Win *win_at(int x, int y)
@@ -545,41 +585,27 @@ static void do_action(int a)
 
 static Rect launcher_rect(void)
 {
-    int w = 660, h = 470;
+    int w = 680, h = 560;
     return (Rect){ (SCREEN_W - w) / 2, maxi(BAR_H + 20, (SCREEN_H - h) / 2 - 40), w, h };
 }
 
-static int ci_contains(const char *hay, const char *needle)
-{
-    /* ASCII için büyük/küçük harf duyarsız arama; Türkçe harfler olduğu gibi */
-    size_t n = strlen(needle);
-    if (!n)
-        return 1;
-    for (const char *p = hay; *p; p++) {
-        size_t i = 0;
-        while (i < n && p[i]) {
-            char a = p[i], b = needle[i];
-            if (a >= 'A' && a <= 'Z') a += 32;
-            if (b >= 'A' && b <= 'Z') b += 32;
-            if (a != b)
-                break;
-            i++;
-        }
-        if (i == n)
-            return 1;
-    }
-    return 0;
-}
+static int ci_contains(const char *hay, const char *needle) { return text_match(hay, needle); }
 
-static int launcher_matches(const App **out)
+/* Arama: ad eşleşmeleri önce (baştan eşleşen en önde), sonra kimlik/açıklama/kategori */
+static int launcher_matches(AppEntry **out)
 {
     int n = 0;
     if (lq.buf[0] == '>')
         return 0;
-    for (int i = 0; i < N_APPS; i++)
-        if (ci_contains(ALL_APPS[i]->name, lq.buf) || ci_contains(ALL_APPS[i]->desc, lq.buf) ||
-            ci_contains(ALL_APPS[i]->id, lq.buf))
-            out[n++] = ALL_APPS[i];
+    for (int pass = 0; pass < 3; pass++)
+        for (int i = 0; i < n_apps && n < 64; i++) {
+            AppEntry *a = &APPS[i];
+            int prefix = text_prefix(a->name, lq.buf);
+            int in_name = ci_contains(a->name, lq.buf);
+            int other = ci_contains(a->desc, lq.buf) || ci_contains(a->id, lq.buf) || ci_contains(a->category, lq.buf);
+            if ((pass == 0 && prefix) || (pass == 1 && in_name && !prefix) || (pass == 2 && other && !in_name))
+                out[n++] = a;
+        }
     return n;
 }
 
@@ -591,6 +617,7 @@ static void open_launcher(void)
         return;
     close_menu();
     launcher_open = 1;
+    apps_scan(); /* marketten yeni kurulanlar görünsün */
     tf_set(&lq, "");
     lq.focus = 1;
     lsel = 0;
@@ -626,21 +653,22 @@ static void launcher_run(void)
         close_launcher();
         return;
     }
-    const App *m[16];
+    AppEntry *m[64];
     int n = launcher_matches(m);
     if (n) {
-        const App *a = m[clampi(lsel, 0, n - 1)];
+        AppEntry *a = m[clampi(lsel, 0, n - 1)];
         close_launcher();
-        wm_open(a, NULL);
+        app_launch(a, NULL);
     }
 }
 
+#define L_COLS 5
 static Rect launcher_tile(int i)
 {
     Rect lr = launcher_rect();
-    int cols = 4, tw = 146, th = 118;
-    int gx = lr.x + (lr.w - cols * tw) / 2;
-    return (Rect){ gx + (i % cols) * tw, lr.y + 92 + (i / cols) * (th + 8), tw - 8, th };
+    int tw = 122, th = 108;
+    int gx = lr.x + (lr.w - L_COLS * tw) / 2;
+    return (Rect){ gx + (i % L_COLS) * tw, lr.y + 88 + (i / L_COLS) * (th + 6), tw - 8, th };
 }
 
 static void draw_launcher(Surf *s)
@@ -672,18 +700,19 @@ static void draw_launcher(Surf *s)
         draw_text(s, F_UI_BOLD, 17, hint.x + 110, hint.y + 34, T.text, "Terminalde çalıştır");
         draw_text_fit(s, F_MONO, 15, hint.x + 110, hint.y + 64, hint.w - 130, T.accent2, lq.buf + 1);
     } else {
-        const App *m[16];
+        AppEntry *m[64];
         int n = launcher_matches(m);
         if (!n)
             draw_text_center(s, F_UI, 15, (Rect){ lr.x, lr.y + 160, lr.w, 40 }, T.subtext, "Eşleşen uygulama yok");
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < n && i < L_COLS * 4; i++) {
             Rect t = launcher_tile(i);
             int sel = i == lsel, hov = i == launcher_hover;
             if (sel || hov)
                 fill_rrect(s, t, 16, sel ? ALPHA(T.accent, 110) : ALPHA(HEX(0xFFFFFF), 22));
-            draw_icon(s, m[i]->icon, t.x + (t.w - 60) / 2, t.y + 12, 60);
-            draw_text_center(s, F_UI_BOLD, 13, (Rect){ t.x, t.y + 78, t.w, 18 }, T.text, m[i]->name);
-            draw_text_center(s, F_UI, 11, (Rect){ t.x + 4, t.y + 96, t.w - 8, 16 }, T.subtext, m[i]->id);
+            app_draw_icon(s, m[i], t.x + (t.w - 56) / 2, t.y + 10, 56);
+            draw_text_fit(s, F_UI_BOLD, 12, t.x + maxi(4, (t.w - text_width(F_UI_BOLD, 12, m[i]->name)) / 2), t.y + 72,
+                          t.w - 8, T.text, m[i]->name);
+            draw_text_center(s, F_UI, 11, (Rect){ t.x + 4, t.y + 90, t.w - 8, 14 }, T.subtext, m[i]->category);
         }
     }
     draw_text_center(s, F_UI, 12, (Rect){ lr.x, lr.y + lr.h - 36, lr.w, 20 }, T.muted,
@@ -743,7 +772,7 @@ static void draw_bar(Surf *s)
     draw_text(s, F_UI_BOLD, 14, lg.x + 38, lg.y + (lg.h - font_height(F_UI_BOLD, 14)) / 2, T.text, "AxsOS");
     Win *f = wm_focused();
     if (f)
-        draw_text(s, F_UI_BOLD, 13, lg.x + lg.w + 16, (BAR_H - font_height(F_UI_BOLD, 13)) / 2, T.subtext, f->app->name);
+        draw_text(s, F_UI_BOLD, 13, lg.x + lg.w + 16, (BAR_H - font_height(F_UI_BOLD, 13)) / 2, T.subtext, win_app_name(f));
 
     draw_text_center(s, F_UI_BOLD, 13, (Rect){ 0, 0, SCREEN_W, BAR_H }, T.text, clock_text);
 
@@ -770,8 +799,10 @@ static void draw_dock(Surf *s)
     draw_shadow(s, d, 20, 24, 8, 120);
     fill_rrect(s, d, 22, ALPHA(HEX(0x14141F), 200));
     stroke_rrect(s, d, 22, 1, ALPHA(HEX(0xFFFFFF), 34));
-    for (int i = 0; i < N_DOCK; i++) {
-        int x = d.x + DOCK_PAD + 10 + i * (DOCK_ICON + 12);
+    if (ndock > N_DOCK)
+        fill_rect(s, (Rect){ d.x + dock_x(N_DOCK) - 13, d.y + 14, 1, d.h - 28 }, ALPHA(HEX(0xFFFFFF), 50));
+    for (int i = 0; i < ndock; i++) {
+        int x = d.x + dock_x(i);
         int y = d.y + DOCK_PAD;
         int sz = DOCK_ICON;
         if (i == dock_hover) {
@@ -779,14 +810,17 @@ static void draw_dock(Surf *s)
             x -= 4;
             y -= 10;
         }
-        draw_icon(s, DOCK[i]->icon, x, y, sz);
-        if (wm_find(DOCK[i]))
-            fill_circle(s, d.x + DOCK_PAD + 10 + i * (DOCK_ICON + 12) + DOCK_ICON / 2.0f, d.y + d.h - 7, 2.5f, T.text);
+        if (ditems[i].builtin)
+            draw_icon(s, ditems[i].builtin->icon, x, y, sz);
+        else
+            win_draw_icon(s, ditems[i].win, x, y, sz);
+        if (!ditems[i].builtin || wm_find(ditems[i].builtin))
+            fill_circle(s, d.x + dock_x(i) + DOCK_ICON / 2.0f, d.y + d.h - 7, 2.5f, T.text);
     }
-    if (dock_hover >= 0) {
-        const char *nm = DOCK[dock_hover]->name;
+    if (dock_hover >= 0 && dock_hover < ndock) {
+        const char *nm = ditems[dock_hover].builtin ? ditems[dock_hover].builtin->name : win_app_name(ditems[dock_hover].win);
         int tw = text_width(F_UI_BOLD, 13, nm) + 24;
-        int cx = d.x + DOCK_PAD + 10 + dock_hover * (DOCK_ICON + 12) + DOCK_ICON / 2;
+        int cx = d.x + dock_x(dock_hover) + DOCK_ICON / 2;
         Rect tip = { cx - tw / 2, d.y - 44, tw, 30 };
         fill_rrect(s, tip, 9, ALPHA(HEX(0x101018), 235));
         stroke_rrect(s, tip, 9, 1, ALPHA(HEX(0xFFFFFF), 30));
@@ -834,7 +868,7 @@ static void render_chrome(Win *w, int focused, int hov_idx)
         }
     }
     int tw = mini(text_width(F_UI_BOLD, 13, w->title), W - 160);
-    draw_icon(c, w->app->icon, (W - tw) / 2 - 24, (TITLE_H - 18) / 2, 18);
+    win_draw_icon(c, w, (W - tw) / 2 - 24, (TITLE_H - 18) / 2, 18);
     draw_text_fit(c, F_UI_BOLD, 13, (W - tw) / 2, (TITLE_H - font_height(F_UI_BOLD, 13)) / 2,
                   W - 160, focused ? T.text : T.muted, w->title);
 }
@@ -961,8 +995,8 @@ static int dock_index_at(int x, int y)
     Rect d = dock_rect();
     if (!rect_has(d, x, y))
         return -1;
-    for (int i = 0; i < N_DOCK; i++) {
-        Rect r = { d.x + DOCK_PAD + 10 + i * (DOCK_ICON + 12) - 6, d.y, DOCK_ICON + 12, d.h };
+    for (int i = 0; i < ndock; i++) {
+        Rect r = { d.x + dock_x(i) - 6, d.y, DOCK_ICON + 12, d.h };
         if (rect_has(r, x, y))
             return i;
     }
@@ -971,8 +1005,11 @@ static int dock_index_at(int x, int y)
 
 static void dock_click(int i)
 {
-    const App *a = DOCK[i];
-    Win *w = wm_find(a);
+    dock_build();
+    if (i < 0 || i >= ndock)
+        return;
+    const App *a = ditems[i].builtin;
+    Win *w = a ? wm_find(a) : ditems[i].win;
     if (!w) {
         wm_open(a, NULL);
     } else if (w == wm_focused()) {
@@ -994,9 +1031,9 @@ static void launcher_mouse(MouseEv *e)
     Rect lr = launcher_rect();
     if (e->kind == M_MOVE) {
         int h = -1;
-        const App *m[16];
+        AppEntry *m[64];
         int n = launcher_matches(m);
-        for (int i = 0; i < n; i++)
+        for (int i = 0; i < n && i < L_COLS * 4; i++)
             if (rect_has(launcher_tile(i), e->x, e->y))
                 h = i;
         if (h != launcher_hover) {
@@ -1319,15 +1356,15 @@ void wm_on_key(KeyEv *e)
         return;
     }
     if (launcher_open) {
-        const App *mm[16];
+        AppEntry *mm[64];
         int n = launcher_matches(mm);
         switch (e->code) {
         case KEY_ESC: close_launcher(); return;
         case KEY_ENTER: case KEY_KPENTER: launcher_run(); return;
         case KEY_RIGHT: if (lq.cur == lq.len) { lsel = mini(lsel + 1, maxi(n - 1, 0)); wm_damage(launcher_rect()); return; } break;
         case KEY_LEFT: if (lq.cur == lq.len && lsel > 0) { lsel--; wm_damage(launcher_rect()); return; } break;
-        case KEY_DOWN: lsel = mini(lsel + 4, maxi(n - 1, 0)); wm_damage(launcher_rect()); return;
-        case KEY_UP: lsel = maxi(lsel - 4, 0); wm_damage(launcher_rect()); return;
+        case KEY_DOWN: lsel = mini(lsel + L_COLS, maxi(n - 1, 0)); wm_damage(launcher_rect()); return;
+        case KEY_UP: lsel = maxi(lsel - L_COLS, 0); wm_damage(launcher_rect()); return;
         }
         if (tf_key(&lq, e)) {
             lsel = 0;
@@ -1366,6 +1403,17 @@ void wm_open_file(const char *path)
         wm_open(&APP_FILES, path);
         return;
     }
+    AppEntry *ae = apps_for_file(path);
+    if (ae) {
+        app_launch(ae, path);
+        return;
+    }
+    static const char *img_ext[] = { ".png", ".jpg", ".jpeg", ".bmp", ".gif", NULL };
+    for (int i = 0; img_ext[i]; i++)
+        if (ends_with(path, img_ext[i])) {
+            wm_notify("Resim Görüntüleyici gerekli", "Uygulama Marketi'nden kurabilirsin", IC_PACKAGES);
+            return;
+        }
     static const char *text_ext[] = { ".axs", ".nyl", ".txt", ".md", ".sh", ".c", ".h", ".py", ".conf",
                                       ".json", ".csv", ".html", ".js", ".css", ".list", NULL };
     for (int i = 0; text_ext[i]; i++)
@@ -1445,6 +1493,7 @@ static int bench_main(void)
     if (font_init() < 0)
         return 1;
     config_load();
+    apps_scan();
     screen = surf_new(SCREEN_W, SCREEN_H);
     mouse_x = 640;
     mouse_y = 400;
@@ -1596,6 +1645,9 @@ int main(int argc, char **argv)
     make_wallpaper();
     if (input_init() < 0)
         fprintf(stderr, "axsde: giriş aygıtı bulunamadı\n");
+    apps_scan();
+    if (ext_init() < 0)
+        fprintf(stderr, "axsde: uygulama soketi açılamadı\n");
     update_clock();
     update_net();
     wm_damage_all();
@@ -1608,13 +1660,19 @@ int main(int argc, char **argv)
     while (quit_code < 0 && !got_term) {
         compose();
         struct pollfd pfd[64];
-        int kind[64]; /* -1 giriş, i >= 0: pencere indeksi */
+        int kind[64]; /* -1 giriş, -2 dış uygulama soketi, >0 pencere kimliği */
         int n = 0;
         int ifd[16];
         int ni = input_fds(ifd, 16);
         for (int i = 0; i < ni; i++) {
             pfd[n] = (struct pollfd){ ifd[i], POLLIN, 0 };
             kind[n++] = -1;
+        }
+        int efd[20];
+        int ne = ext_fds(efd, 20);
+        for (int i = 0; i < ne && n < 60; i++) {
+            pfd[n] = (struct pollfd){ efd[i], POLLIN, 0 };
+            kind[n++] = -2;
         }
         for (int i = 0; i < nwins && n < 60; i++) {
             if (!wins[i]->app->fds)
@@ -1636,6 +1694,8 @@ int main(int argc, char **argv)
                 continue;
             if (kind[i] == -1) {
                 input_read(pfd[i].fd);
+            } else if (kind[i] == -2) {
+                ext_io(pfd[i].fd);
             } else {
                 for (int j = 0; j < nwins; j++)
                     if (wins[j]->id == kind[i] && wins[j]->app->io) {

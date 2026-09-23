@@ -1,3 +1,7 @@
 name=axs-ornekler
 version=1.0
 description=Başlangıç için Axs örnek programları (~/Axs-Ornekleri)
+title=Axs Örnekleri
+category=Axs
+open=/root/Axs-Ornekleri
+about=Axs diline başlamak için dört örnek program: merhaba, döngüler, fonksiyonlar ve sözlükler. ~/Axs-Ornekleri klasörüne kurulur; Axs Stüdyo ile açıp F5 ile çalıştırabilirsin.

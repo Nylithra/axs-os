@@ -114,7 +114,7 @@ static void a_draw(Win *w, Surf *s)
     action_card(s, u, (Rect){ 36, y, cw, 72 }, IC_STUDIO, "Axs Stüdyo", "Axs kodu yaz ve tek tıkla çalıştır", &APP_STUDIO);
     action_card(s, u, (Rect){ 48 + cw, y, cw, 72 }, IC_TERMINAL, "Terminal", "axsh kabuğu: axs, axpkg, busybox", &APP_TERMINAL);
     y += 84;
-    action_card(s, u, (Rect){ 36, y, cw, 72 }, IC_PACKAGES, "Paket Merkezi", "axpkg ile uygulama kur/kaldır", &APP_PACKAGES);
+    action_card(s, u, (Rect){ 36, y, cw, 72 }, IC_PACKAGES, "Uygulama Marketi", "Oyunlar ve araçlar kur", &APP_PACKAGES);
     action_card(s, u, (Rect){ 48 + cw, y, cw, 72 }, IC_FILES, "Dosyalar", "Axs örneklerine göz at", &APP_FILES);
 
     y += 96;

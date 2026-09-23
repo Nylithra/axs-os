@@ -1,3 +1,7 @@
 name=merhaba
 version=1.0
 description=Axs ile yazılmış selamlama programı
+title=Merhaba
+category=Axs
+run=merhaba
+about=Axs dilinde yazılmış küçük bir selamlama programı: dünyayı selamlar ve Axs ifadelerinin nasıl çalıştığını gösterir. Axs öğrenmeye başlamak için kaynağına göz at: /usr/bin/merhaba
