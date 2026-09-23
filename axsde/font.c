@@ -52,8 +52,9 @@ static unsigned char *load(const char *path)
 
 static int font_load(Font *f, const char *file, int bold)
 {
-    char path[256];
-    snprintf(path, sizeof path, FONT_DIR "%s", file);
+    char path[512];
+    const char *dir = getenv("AXSDE_FONTS"); /* ölçüm/test için başka dizin */
+    snprintf(path, sizeof path, "%s/%s", dir ? dir : FONT_DIR, file);
     f->data = load(path);
     if (!f->data || !stbtt_InitFont(&f->info, f->data, stbtt_GetFontOffsetForIndex(f->data, 0))) {
         fprintf(stderr, "axsde: yazı tipi yüklenemedi: %s\n", path);

@@ -5,12 +5,17 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <arpa/inet.h>
 #include <math.h>
+#include <net/if.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -45,6 +50,7 @@ static char net_text[64];
 
 /* sürükleme / boyutlandırma / yakalama */
 static Win *drag_win, *resize_win, *grab_win;
+static Rect resize_box; /* boyutlandırma önizlemesi (ekran koordinatı) */
 static int drag_dx, drag_dy;
 static int title_btn_win = -1, title_btn = -1; /* basılan başlık düğmesi */
 static int hover_title_win = -1, hover_title_btn = -1;
@@ -90,7 +96,7 @@ void wm_damage(Rect r)
         /* kesişen ya da çok yakın bölgeleri birleştir */
         Rect u = rect_union(dmg[i], r);
         long ua = (long)u.w * u.h, sa = (long)dmg[i].w * dmg[i].h + (long)r.w * r.h;
-        if (ua <= sa + 4096 || !rect_empty(rect_isect(dmg[i], r))) {
+        if (ua <= sa + 8192) {
             dmg[i] = u;
             return;
         }
@@ -272,6 +278,18 @@ static void damage_win(Win *w) { wm_damage(win_outer(w)); }
 
 static void damage_bar(void) { wm_damage((Rect){ 0, 0, SCREEN_W, BAR_H }); }
 
+/* Dikdörtgenin yalnızca kenar şeritlerini hasarla (içini yeniden çizme) */
+static void damage_outline(Rect r)
+{
+    if (rect_empty(r))
+        return;
+    int t = 4;
+    wm_damage((Rect){ r.x - t, r.y - t, r.w + 2 * t, 2 * t });
+    wm_damage((Rect){ r.x - t, r.y + r.h - t, r.w + 2 * t, 2 * t });
+    wm_damage((Rect){ r.x - t, r.y - t, 2 * t, r.h + 2 * t });
+    wm_damage((Rect){ r.x + r.w - t, r.y - t, 2 * t, r.h + 2 * t });
+}
+
 void wm_focus(Win *w)
 {
     int i = win_index(w);
@@ -368,6 +386,7 @@ void wm_close(Win *w)
     if (resize_win == w) resize_win = NULL;
     if (grab_win == w) grab_win = NULL;
     surf_free(&w->content);
+    surf_free(&w->chrome);
     memmove(&wins[i], &wins[i + 1], sizeof(Win *) * (nwins - i - 1));
     nwins--;
     free(w);
@@ -693,10 +712,17 @@ static void update_clock(void)
 
 static void update_net(void)
 {
+    /* eth0'ın IPv4 adresini doğrudan çekirdekten sor (alt süreç yok -> donma yok) */
     char buf[64] = "";
-    char *argv[] = { "sh", "-c", "ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1", NULL };
-    run_capture(argv, buf, sizeof buf);
-    buf[strcspn(buf, "\n")] = 0;
+    int sk = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (sk >= 0) {
+        struct ifreq ifr;
+        memset(&ifr, 0, sizeof ifr);
+        snprintf(ifr.ifr_name, sizeof ifr.ifr_name, "eth0");
+        if (ioctl(sk, SIOCGIFADDR, &ifr) == 0)
+            inet_ntop(AF_INET, &((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr, buf, sizeof buf);
+        close(sk);
+    }
     if (strcmp(buf, net_text)) {
         snprintf(net_text, sizeof net_text, "%s", buf);
         damage_bar();
@@ -774,38 +800,57 @@ static Rect dock_tip_rect(void)
     return (Rect){ d.x - 60, d.y - 50, d.w + 120, 50 };
 }
 
+static uint32_t str_hash(const char *s)
+{
+    uint32_t h = 2166136261u;
+    while (*s)
+        h = (h ^ (uint8_t)*s++) * 16777619u;
+    return h;
+}
+
+/* Başlık çubuğunu (düğmeler, simge, başlık) pencereye ait yüzeye çiz. */
+static void render_chrome(Win *w, int focused, int hov_idx)
+{
+    Surf *c = &w->chrome;
+    surf_resize(c, w->r.w, TITLE_H);
+    surf_noclip(c);
+    int W = c->w;
+    fill_rect(c, (Rect){ 0, 0, W, TITLE_H }, focused ? T.title_focus : T.title_blur);
+    fill_rect(c, (Rect){ 0, TITLE_H - 1, W, 1 }, ALPHA(HEX(0x000000), 60));
+    static const uint32_t BC[3] = { 0xFFF87171, 0xFFFBBF24, 0xFF34D399 };
+    for (int i = 0; i < 3; i++) {
+        float cx = 14 + i * 22 + 7.f, cy = (TITLE_H - 14) / 2 + 7.f;
+        fill_circle(c, cx, cy, 6.5f, focused || hov_idx >= 0 ? BC[i] : T.overlay);
+        if (hov_idx >= 0) {
+            uint32_t k = ALPHA(HEX(0x000000), 150);
+            if (i == 0) {
+                draw_line(c, cx - 2.5f, cy - 2.5f, cx + 2.5f, cy + 2.5f, 1.4f, k);
+                draw_line(c, cx - 2.5f, cy + 2.5f, cx + 2.5f, cy - 2.5f, 1.4f, k);
+            } else {
+                draw_line(c, cx - 3, cy, cx + 3, cy, 1.4f, k);
+                if (i == 2)
+                    draw_line(c, cx, cy - 3, cx, cy + 3, 1.4f, k);
+            }
+        }
+    }
+    int tw = mini(text_width(F_UI_BOLD, 13, w->title), W - 160);
+    draw_icon(c, w->app->icon, (W - tw) / 2 - 24, (TITLE_H - 18) / 2, 18);
+    draw_text_fit(c, F_UI_BOLD, 13, (W - tw) / 2, (TITLE_H - font_height(F_UI_BOLD, 13)) / 2,
+                  W - 160, focused ? T.text : T.muted, w->title);
+}
+
 static void draw_window(Surf *s, Win *w, int focused)
 {
     Rect r = w->r;
     draw_shadow(s, r, WIN_RAD, SHADOW, 6, focused ? 150 : 90);
-    uint32_t tb = focused ? T.title_focus : T.title_blur;
-    fill_rrect_corners(s, (Rect){ r.x, r.y, r.w, TITLE_H }, WIN_RAD, tb, 3);
-    fill_rect(s, (Rect){ r.x, r.y + TITLE_H - 1, r.w, 1 }, ALPHA(HEX(0x000000), 60));
-    /* başlık düğmeleri */
-    static const uint32_t BC[3] = { 0xFFF87171, 0xFFFBBF24, 0xFF34D399 };
     int hov_idx = win_index(w) == hover_title_win ? hover_title_btn : -1;
-    for (int i = 0; i < 3; i++) {
-        Rect b = title_btn_rect(w, i);
-        float cx = b.x + 7.f, cy = b.y + 7.f;
-        uint32_t c = focused || hov_idx >= 0 ? BC[i] : T.overlay;
-        fill_circle(s, cx, cy, 6.5f, c);
-        if (hov_idx >= 0) {
-            uint32_t k = ALPHA(HEX(0x000000), 150);
-            if (i == 0) {
-                draw_line(s, cx - 2.5f, cy - 2.5f, cx + 2.5f, cy + 2.5f, 1.4f, k);
-                draw_line(s, cx - 2.5f, cy + 2.5f, cx + 2.5f, cy - 2.5f, 1.4f, k);
-            } else if (i == 1) {
-                draw_line(s, cx - 3, cy, cx + 3, cy, 1.4f, k);
-            } else {
-                draw_line(s, cx - 3, cy, cx + 3, cy, 1.4f, k);
-                draw_line(s, cx, cy - 3, cx, cy + 3, 1.4f, k);
-            }
-        }
+    uint32_t key = str_hash(w->title) ^ ((uint32_t)r.w << 8) ^ (uint32_t)(focused ? 1 : 0) ^
+                   ((uint32_t)(hov_idx + 2) << 4) ^ T.accent;
+    if (!w->chrome.px || w->chrome.w != r.w || w->chrome_key != key) {
+        render_chrome(w, focused, hov_idx);
+        w->chrome_key = key;
     }
-    int tw = mini(text_width(F_UI_BOLD, 13, w->title), r.w - 160);
-    draw_icon(s, w->app->icon, r.x + (r.w - tw) / 2 - 24, r.y + (TITLE_H - 18) / 2, 18);
-    draw_text_fit(s, F_UI_BOLD, 13, r.x + (r.w - tw) / 2, r.y + (TITLE_H - font_height(F_UI_BOLD, 13)) / 2,
-                  r.w - 160, focused ? T.text : T.muted, w->title);
+    blit_rrect(s, r.x, r.y, &w->chrome, (Rect){ 0, 0, r.w, TITLE_H }, WIN_RAD, 3);
     blit_rrect(s, r.x, r.y + TITLE_H, &w->content, (Rect){ 0, 0, w->content.w, w->content.h }, WIN_RAD, 12);
     stroke_rrect(s, r, WIN_RAD, 1, ALPHA(HEX(0xFFFFFF), focused ? 30 : 16));
 }
@@ -858,6 +903,10 @@ static void render_scene(Rect clip, int with_overlays)
         draw_dock(&screen);
     if (!with_overlays)
         return;
+    if (resize_win && !rect_empty(resize_box)) {
+        stroke_rrect(&screen, resize_box, WIN_RAD, 3, T.accent2);
+        stroke_rrect(&screen, rect_inset(resize_box, 3), WIN_RAD - 3, 1, ALPHA(HEX(0x000000), 120));
+    }
     if (nnotif)
         draw_notifs(&screen);
     if (menu_open)
@@ -897,6 +946,7 @@ static void compose(void)
             draw_arrow_cursor(&screen, mouse_x, mouse_y);
         fb_present(&screen, d);
     }
+    fb_flush();
     ndmg = 0;
 }
 
@@ -1041,10 +1091,20 @@ void wm_on_mouse(MouseEv *e)
         return;
     }
     if (resize_win) {
+        /* sürüklerken yalnızca çerçeve önizlemesi; gerçek boyut bırakınca uygulanır
+           (her harekette pencere içeriğini yeniden oluşturmak yavaş makinede kasar) */
+        Rect nb = resize_win->r;
+        nb.w = clampi(e->x - nb.x, resize_win->min_w, SCREEN_W);
+        nb.h = clampi(e->y - nb.y, resize_win->min_h + TITLE_H, SCREEN_H - BAR_H);
         if (e->kind == M_MOVE) {
-            win_resize(resize_win, e->x - resize_win->r.x, e->y - resize_win->r.y - TITLE_H);
+            damage_outline(resize_box);
+            resize_box = nb;
+            damage_outline(resize_box);
         } else if (e->kind == M_UP) {
+            damage_outline(resize_box);
+            win_resize(resize_win, nb.w, nb.h - TITLE_H);
             resize_win = NULL;
+            resize_box = (Rect){ 0, 0, 0, 0 };
         }
         return;
     }
@@ -1147,6 +1207,7 @@ void wm_on_mouse(MouseEv *e)
             /* sağ-alt köşe: boyutlandır */
             if (!w->maximized && e->x >= w->r.x + w->r.w - 18 && e->y >= w->r.y + w->r.h - 18) {
                 resize_win = w;
+                resize_box = w->r;
                 return;
             }
             grab_win = w;
@@ -1357,8 +1418,162 @@ static void tick(void)
             wins[i]->app->tick(wins[i]);
 }
 
+/* ------------------------------------------------------------------ */
+/* Ölçüm kipi: axsde --bench                                           */
+/* Ekran olmadan gerçek olay yollarını çalıştırıp kare sürelerini yazar */
+/* ------------------------------------------------------------------ */
+
+static double bench_frame(void)
+{
+    struct timespec a, b;
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    compose();
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    return (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) / 1e6;
+}
+
+static void bench_report(const char *name, double total, int n)
+{
+    printf("  %-34s %7.2f ms/kare  (%d kare)\n", name, total / n, n);
+    fflush(stdout);
+}
+
+static int bench_main(void)
+{
+    SCREEN_W = 1280;
+    SCREEN_H = 800;
+    if (font_init() < 0)
+        return 1;
+    config_load();
+    screen = surf_new(SCREEN_W, SCREEN_H);
+    mouse_x = 640;
+    mouse_y = 400;
+    make_wallpaper();
+    wm_damage_all();
+    compose();
+    wm_open(&APP_ABOUT, "welcome");
+    wm_open(&APP_MONITOR, NULL);
+    wm_open(&APP_STUDIO, NULL);
+    Win *term = wm_open(&APP_TERMINAL, NULL);
+    compose();
+    const char *shot = getenv("AXSDE_BENCH_SHOT");
+    if (shot) {
+        FILE *f = fopen(shot, "wb");
+        if (f) {
+            fprintf(f, "P6\n%d %d\n255\n", SCREEN_W, SCREEN_H);
+            for (int i = 0; i < SCREEN_W * SCREEN_H; i++) {
+                uint32_t p = screen.px[i];
+                fputc((p >> 16) & 255, f);
+                fputc((p >> 8) & 255, f);
+                fputc(p & 255, f);
+            }
+            fclose(f);
+        }
+    }
+    printf("AxsDE ölçüm (1280x800, 4 pencere):\n");
+
+    double t = 0;
+    int n = 10;
+    for (int i = 0; i < n; i++) {
+        wm_damage_all();
+        t += bench_frame();
+    }
+    bench_report("tam ekran yeniden çizim", t, n);
+
+    /* imleç: masaüstü üzerinde gezinme */
+    t = 0;
+    n = 200;
+    for (int i = 0; i < n; i++) {
+        MouseEv e = { M_MOVE, 1100 + (i % 40), 300 + (i % 60), 0, 0, 0 };
+        wm_on_mouse(&e);
+        t += bench_frame();
+    }
+    bench_report("fare hareketi (masaüstü)", t, n);
+
+    /* imleç: pencere üzerinde gezinme */
+    t = 0;
+    for (int i = 0; i < n; i++) {
+        MouseEv e = { M_MOVE, term->r.x + 100 + (i % 200), term->r.y + 120 + (i % 100), 0, 0, 0 };
+        wm_on_mouse(&e);
+        t += bench_frame();
+    }
+    bench_report("fare hareketi (pencere üstü)", t, n);
+
+    /* pencere sürükleme */
+    MouseEv d = { M_DOWN, term->r.x + 200, term->r.y + 15, 1, 0, 1 };
+    wm_on_mouse(&d);
+    t = 0;
+    n = 100;
+    for (int i = 0; i < n; i++) {
+        MouseEv e = { M_MOVE, d.x + (i % 50) * 6, d.y + (i % 30) * 4, 0, 0, 0 };
+        wm_on_mouse(&e);
+        t += bench_frame();
+    }
+    MouseEv u = { M_UP, d.x, d.y, 1, 0, 1 };
+    wm_on_mouse(&u);
+    bench_report("pencere sürükleme", t, n);
+
+    /* terminal çıktısı */
+    t = 0;
+    n = 100;
+    wm_focus(term);
+    compose();
+    for (int i = 0; i < n; i++) {
+        char line[64];
+        snprintf(line, sizeof line, "satir %d: merhaba AxsOS\r\n", i);
+        struct { Term *t; } *ts = term->st;
+        term_feed(ts->t, line, (int)strlen(line));
+        term->dirty = 1;
+        t += bench_frame();
+    }
+    bench_report("terminal satır çıktısı", t, n);
+
+    /* editörde yazma */
+    Win *st = wm_find(&APP_STUDIO);
+    wm_focus(st);
+    compose();
+    t = 0;
+    n = 60;
+    for (int i = 0; i < n; i++) {
+        KeyEv k = { 30 /* KEY_A */, 'a', 0, 1 };
+        wm_on_key(&k);
+        t += bench_frame();
+    }
+    bench_report("Axs Stüdyo'da yazma", t, n);
+
+    /* boyutlandırma */
+    MouseEv rd = { M_DOWN, st->r.x + st->r.w - 5, st->r.y + st->r.h - 5, 1, 0, 1 };
+    wm_on_mouse(&rd);
+    t = 0;
+    n = 30;
+    for (int i = 0; i < n; i++) {
+        MouseEv e = { M_MOVE, rd.x - (i % 15) * 8, rd.y - (i % 15) * 5, 0, 0, 0 };
+        wm_on_mouse(&e);
+        t += bench_frame();
+    }
+    MouseEv ru = { M_UP, rd.x, rd.y, 1, 0, 1 };
+    wm_on_mouse(&ru);
+    bench_frame();
+    bench_report("pencere boyutlandırma", t, n);
+
+    /* başlatıcı */
+    struct timespec a, b;
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    open_launcher();
+    compose();
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    bench_report("başlatıcıyı açma", (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) / 1e6, 1);
+    close_launcher();
+    compose();
+    while (nwins)
+        wm_close(wins[nwins - 1]);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "--bench"))
+        return bench_main();
     if (argc > 1 && (!strcmp(argv[1], "-v") || !strcmp(argv[1], "--version"))) {
         printf("axsde %s\n", AXSDE_VERSION);
         return 0;

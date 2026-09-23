@@ -131,6 +131,7 @@ extern const char *ACCENT_NAMES[];
 int  fb_open(void);
 void fb_close(void);
 void fb_present(Surf *back, Rect r);
+void fb_flush(void);
 extern int SCREEN_W, SCREEN_H;
 
 enum { MOD_SHIFT = 1, MOD_CTRL = 2, MOD_ALT = 4, MOD_ALTGR = 8, MOD_SUPER = 16 };
@@ -200,6 +201,8 @@ struct Win {
     int closing;
     uint32_t bg;        /* başlık çubuğu arka planı (0 = tema) */
     Rect dmg;           /* çizimde değişen içerik bölgesi (boşsa tamamı) */
+    Surf chrome;        /* önbelleğe alınmış başlık çubuğu */
+    uint32_t chrome_key;/* önbelleğin hangi duruma ait olduğu */
 };
 
 extern const App APP_TERMINAL, APP_FILES, APP_STUDIO, APP_PACKAGES,

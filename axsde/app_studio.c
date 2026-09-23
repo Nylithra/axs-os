@@ -32,6 +32,8 @@ typedef struct {
     int blink_on, blink_t;
     char msg[160];
     long msg_until;
+    /* hızlı yol: yalnızca bu satırları + durum çubuğunu yeniden çiz */
+    int fast_ok, fast_n, fast_lines[2];
 } St;
 
 static const char *SAMPLE =
@@ -472,9 +474,106 @@ static void ensure_visible(Win *w)
         st->hx = cc - cols + 8;
 }
 
+/* Görünür bir editör satırını (arka plan, numara, renkli metin, imleç) çiz. */
+static Rect draw_line_row(Win *w, Surf *s, int li, uint32_t *cols, uint8_t *bold)
+{
+    St *st = w->st;
+    Rect er = editor_rect(w);
+    int W = s->w;
+    int i = li - st->top;
+    int y = er.y + 6 + i * LH;
+    if (i < 0 || y >= er.y + er.h || li >= st->n)
+        return (Rect){ 0, 0, 0, 0 };
+    Rect band = { 0, y - 2, W, LH };
+    band = rect_isect(band, er);
+    Rect oc = s->clip;
+    surf_clip(s, rect_isect(oc, band));
+    fill_rect(s, band, HEX(0x191926));
+    fill_rect(s, (Rect){ 0, band.y, GUTTER, band.h }, HEX(0x161622));
+    int cw = mono_advance(FS);
+    Line *l = &st->ln[li];
+    int cur = li == st->cl;
+    if (cur && !st->out_focus)
+        fill_rect(s, (Rect){ GUTTER, y - 2, W - GUTTER, LH }, ALPHA(HEX(0xFFFFFF), 8));
+    char num[16];
+    snprintf(num, sizeof num, "%d", li + 1);
+    draw_text(s, cur ? F_MONO_BOLD : F_MONO, 12, GUTTER - 12 - text_width(F_MONO, 12, num), y + 2,
+              cur ? T.subtext : HEX(0x45475A), num);
+    surf_clip(s, rect_isect(oc, rect_isect(band, (Rect){ GUTTER + 6, er.y, W - GUTTER - 6, er.h })));
+    int n = mini(l->len, 4096);
+    highlight(l->s, n, cols, bold);
+    int c = 0;
+    const char *p = l->s;
+    while (p < l->s + n) {
+        int b = (int)(p - l->s);
+        uint32_t cp = utf8_next(&p);
+        if (c >= st->hx) {
+            int px = GUTTER + 10 + (c - st->hx) * cw;
+            if (px > W)
+                break;
+            if (cp != ' ')
+                draw_glyph(s, bold[b] ? F_MONO_BOLD : F_MONO, FS, px, y, cols[b], cp);
+        }
+        c++;
+    }
+    /* girinti kılavuzları */
+    int ind = 0;
+    while (ind < l->len && l->s[ind] == ' ')
+        ind++;
+    for (int g = 2; g < ind; g += 2)
+        if (g >= st->hx)
+            fill_rect(s, (Rect){ GUTTER + 10 + (g - st->hx) * cw, y - 2, 1, LH }, ALPHA(HEX(0xFFFFFF), 14));
+    if (cur && st->blink_on && !st->out_focus && wm_focused() == w) {
+        int ccol = char_col(l->s, st->cc) - st->hx;
+        if (ccol >= 0)
+            fill_rect(s, (Rect){ GUTTER + 10 + ccol * cw, y - 1, 2, LH - 2 }, T.accent2);
+    }
+    s->clip = oc;
+    return band;
+}
+
+static Rect draw_status(Win *w, Surf *s)
+{
+    St *st = w->st;
+    int W = s->w, H = s->h;
+    Rect sb = { 0, H - STATUS_H, W, STATUS_H };
+    fill_rect(s, sb, T.accent);
+    fill_rect(s, sb, ALPHA(HEX(0x000000), 70));
+    char info[160];
+    snprintf(info, sizeof info, "Satır %d, Sütun %d", st->cl + 1, char_col(st->ln[st->cl].s, st->cc) + 1);
+    draw_text(s, F_UI_BOLD, 12, 12, sb.y + 6, HEX(0xFFFFFF), info);
+    const char *right = "Axs  •  UTF-8  •  F5 çalıştır  •  Ctrl+S kaydet";
+    draw_text(s, F_UI, 12, W - 12 - text_width(F_UI, 12, right), sb.y + 6, ALPHA(HEX(0xFFFFFF), 220), right);
+    if (st->msg[0] && now_ms() < st->msg_until)
+        draw_text_fit(s, F_UI, 12, 150, sb.y + 6, W - 150 - text_width(F_UI, 12, right) - 30, HEX(0xFFFFFF), st->msg);
+    return sb;
+}
+
 static void st_draw(Win *w, Surf *s)
 {
     St *st = w->st;
+    if (st->fast_ok) {
+        /* hızlı yol: yazarken/imleç hareketinde yalnızca etkilenen satırlar */
+        st->fast_ok = 0;
+        uint32_t cols[4096];
+        uint8_t bold[4096];
+        Rect d = draw_status(w, s);
+        for (int k = 0; k < st->fast_n; k++) {
+            Rect band = draw_line_row(w, s, st->fast_lines[k], cols, bold);
+            if (rect_empty(band))
+                continue;
+            /* satır şeridinin üstünden geçen kaydırma çubuğu parçasını geri çiz */
+            Rect er = editor_rect(w);
+            int vis = er.h / LH;
+            Rect oc = s->clip;
+            surf_clip(s, rect_isect(oc, band));
+            ui_scrollbar(s, (Rect){ s->w - 8, er.y + 4, 5, er.h - 8 }, st->n + vis / 2, vis, st->top);
+            s->clip = oc;
+            d = rect_union(d, band);
+        }
+        w->dmg = d;
+        return;
+    }
     UiState *u = &st->ui;
     ui_begin(u);
     int W = s->w, H = s->h;
@@ -520,55 +619,11 @@ static void st_draw(Win *w, Surf *s)
     /* editör */
     Rect er = editor_rect(w);
     fill_rect(s, (Rect){ 0, er.y, GUTTER, er.h }, HEX(0x161622));
-    int cw = mono_advance(FS);
     int vis = er.h / LH;
-    Rect oc = s->clip;
     uint32_t *cols = malloc(sizeof(uint32_t) * 4096);
     uint8_t *bold = malloc(4096);
-    for (int i = 0; i < vis + 1 && st->top + i < st->n; i++) {
-        int li = st->top + i;
-        Line *l = &st->ln[li];
-        int y = er.y + 6 + i * LH;
-        if (y >= er.y + er.h)
-            break;
-        int cur = li == st->cl;
-        if (cur && !st->out_focus)
-            fill_rect(s, (Rect){ GUTTER, y - 2, W - GUTTER, LH }, ALPHA(HEX(0xFFFFFF), 8));
-        char num[16];
-        snprintf(num, sizeof num, "%d", li + 1);
-        draw_text(s, cur ? F_MONO_BOLD : F_MONO, 12, GUTTER - 12 - text_width(F_MONO, 12, num), y + 2,
-                  cur ? T.subtext : HEX(0x45475A), num);
-        surf_clip(s, rect_isect(oc, (Rect){ GUTTER + 6, er.y, W - GUTTER - 6, er.h }));
-        int n = mini(l->len, 4096);
-        highlight(l->s, n, cols, bold);
-        int c = 0;
-        const char *p = l->s;
-        while (p < l->s + n) {
-            int b = (int)(p - l->s);
-            uint32_t cp = utf8_next(&p);
-            if (c >= st->hx) {
-                int px = GUTTER + 10 + (c - st->hx) * cw;
-                if (px > W)
-                    break;
-                if (cp != ' ')
-                    draw_glyph(s, bold[b] ? F_MONO_BOLD : F_MONO, FS, px, y, cols[b], cp);
-            }
-            c++;
-        }
-        /* girinti kılavuzları */
-        int ind = 0;
-        while (ind < l->len && l->s[ind] == ' ')
-            ind++;
-        for (int g = 2; g < ind; g += 2)
-            if (g >= st->hx)
-                fill_rect(s, (Rect){ GUTTER + 10 + (g - st->hx) * cw, y - 2, 1, LH }, ALPHA(HEX(0xFFFFFF), 14));
-        if (cur && st->blink_on && !st->out_focus && wm_focused() == w) {
-            int ccol = char_col(l->s, st->cc) - st->hx;
-            if (ccol >= 0)
-                fill_rect(s, (Rect){ GUTTER + 10 + ccol * cw, y - 1, 2, LH - 2 }, T.accent2);
-        }
-        s->clip = oc;
-    }
+    for (int i = 0; i < vis + 1 && st->top + i < st->n; i++)
+        draw_line_row(w, s, st->top + i, cols, bold);
     free(cols);
     free(bold);
     ui_scrollbar(s, (Rect){ W - 8, er.y + 4, 5, er.h - 8 }, st->n + vis / 2, vis, st->top);
@@ -605,17 +660,7 @@ static void st_draw(Win *w, Surf *s)
         term_draw(st->out, s, (Rect){ orr.x + 12, orr.y + 36, oc2 * cws, orow * chs }, st->out_focus && wm_focused() == w, 1);
     }
 
-    /* durum çubuğu */
-    Rect sb = { 0, H - STATUS_H, W, STATUS_H };
-    fill_rect(s, sb, T.accent);
-    fill_rect(s, sb, ALPHA(HEX(0x000000), 70));
-    char info[160];
-    snprintf(info, sizeof info, "Satır %d, Sütun %d", st->cl + 1, char_col(st->ln[st->cl].s, st->cc) + 1);
-    draw_text(s, F_UI_BOLD, 12, 12, sb.y + 6, HEX(0xFFFFFF), info);
-    const char *right = "Axs  •  UTF-8  •  F5 çalıştır  •  Ctrl+S kaydet";
-    draw_text(s, F_UI, 12, W - 12 - text_width(F_UI, 12, right), sb.y + 6, ALPHA(HEX(0xFFFFFF), 220), right);
-    if (st->msg[0] && now_ms() < st->msg_until)
-        draw_text_fit(s, F_UI, 12, 150, sb.y + 6, W - 150 - text_width(F_UI, 12, right) - 30, HEX(0xFFFFFF), st->msg);
+    draw_status(w, s);
 }
 
 /* ------------------------------------------------------------------ */
@@ -730,11 +775,30 @@ static void toggle_comment(Win *w)
     edited(w);
 }
 
+static void st_key_inner(Win *w, KeyEv *e);
+
 static void st_key(Win *w, KeyEv *e)
 {
     St *st = w->st;
     if (!e->down)
         return;
+    int o_top = st->top, o_hx = st->hx, o_n = st->n, o_cl = st->cl, o_mod = st->modified, o_out = st->out_focus;
+    st_key_inner(w, e);
+    if (w->dirty && st->top == o_top && st->hx == o_hx && st->n == o_n && st->modified == o_mod &&
+        st->out_focus == o_out && !o_out) {
+        st->fast_ok = 1;
+        st->fast_n = 0;
+        st->fast_lines[st->fast_n++] = o_cl;
+        if (st->cl != o_cl)
+            st->fast_lines[st->fast_n++] = st->cl;
+    } else {
+        st->fast_ok = 0;
+    }
+}
+
+static void st_key_inner(Win *w, KeyEv *e)
+{
+    St *st = w->st;
     int ctrl = e->mods & MOD_CTRL;
     if ((ctrl && e->code == KEY_R) || e->code == KEY_F5) {
         if (!(st->out && term_alive(st->out)))
@@ -754,7 +818,7 @@ static void st_key(Win *w, KeyEv *e)
             term_key(st->out, e);
         } else {
             st->out_focus = 0; /* program bitti: yazmaya editörde devam et */
-            st_key(w, e);
+            st_key_inner(w, e);
             return;
         }
         w->dirty = 1;
@@ -862,6 +926,7 @@ static void st_key(Win *w, KeyEv *e)
 static void st_mouse(Win *w, MouseEv *e)
 {
     St *st = w->st;
+    st->fast_ok = 0;
     Rect er = editor_rect(w);
     if (e->kind == M_WHEEL) {
         if (st->out_open && rect_has(out_rect(w), e->x, e->y) && st->out) {
@@ -905,6 +970,7 @@ static void st_io(Win *w, int fd)
 {
     (void)fd;
     St *st = w->st;
+    st->fast_ok = 0;
     if (!term_read(st->out)) {
         int code = term_exit_code(st->out);
         char m[96];
@@ -922,6 +988,11 @@ static void st_tick(Win *w)
     if (++st->blink_t >= 2) {
         st->blink_t = 0;
         st->blink_on = !st->blink_on;
+        if (!w->dirty && !st->out_focus) {
+            st->fast_ok = 1;
+            st->fast_n = 1;
+            st->fast_lines[0] = st->cl;
+        }
         w->dirty = 1;
     }
     if (st->msg[0] && now_ms() >= st->msg_until) {
@@ -933,6 +1004,7 @@ static void st_tick(Win *w)
 static void st_resize(Win *w)
 {
     St *st = w->st;
+    st->fast_ok = 0;
     if (st->out) {
         int c, r;
         out_grid(w, &c, &r);

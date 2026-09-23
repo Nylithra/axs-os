@@ -245,7 +245,8 @@ static void s_key(Win *w, KeyEv *e)
 static void s_tick(Win *w)
 {
     SetSt *st = w->st;
-    if (st->page == 2 || st->page == 3)
+    static int n;
+    if ((st->page == 2 || st->page == 3) && ++n % 4 == 0) /* saniyede bir */
         w->dirty = 1;
 }
 

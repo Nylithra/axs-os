@@ -223,28 +223,35 @@ static inline float sd_rrect(float px, float py, float cx, float cy, float hw, f
 
 void stroke_rrect(Surf *s, Rect r, int rad, int width, uint32_t c)
 {
-    Rect k = rect_isect(r, s->clip);
-    if (rect_empty(k))
+    if (rect_empty(rect_isect(r, s->clip)))
         return;
     rad = mini(rad, mini(r.w, r.h) / 2);
+    width = maxi(1, width);
+    int cr = maxi(rad, width); /* köşe karesi */
+    /* düz kenarlar */
+    fill_rect(s, (Rect){ r.x + cr, r.y, r.w - 2 * cr, width }, c);
+    fill_rect(s, (Rect){ r.x + cr, r.y + r.h - width, r.w - 2 * cr, width }, c);
+    fill_rect(s, (Rect){ r.x, r.y + cr, width, r.h - 2 * cr }, c);
+    fill_rect(s, (Rect){ r.x + r.w - width, r.y + cr, width, r.h - 2 * cr }, c);
+    /* köşeler: uzaklık alanı */
     float cx = r.x + r.w / 2.0f, cy = r.y + r.h / 2.0f, hw = r.w / 2.0f, hh = r.h / 2.0f;
     int a = CA(c);
-    int band = maxi(rad, width) + 1;
-    for (int y = k.y; y < k.y + k.h; y++) {
-        int full = y < r.y + band || y >= r.y + r.h - band;
-        for (int x = k.x; x < k.x + k.w; x++) {
-            if (!full && x >= r.x + width + 1 && x < r.x + r.w - width - 1) {
-                x = r.x + r.w - width - 2;
-                continue;
+    Rect corners[4] = {
+        { r.x, r.y, cr, cr }, { r.x + r.w - cr, r.y, cr, cr },
+        { r.x, r.y + r.h - cr, cr, cr }, { r.x + r.w - cr, r.y + r.h - cr, cr, cr },
+    };
+    for (int q = 0; q < 4; q++) {
+        Rect k = rect_isect(corners[q], s->clip);
+        for (int y = k.y; y < k.y + k.h; y++)
+            for (int x = k.x; x < k.x + k.w; x++) {
+                float d = sd_rrect(x + 0.5f, y + 0.5f, cx, cy, hw, hh, (float)rad);
+                float outer = 0.5f - d, inner = 0.5f - (d + width);
+                outer = outer < 0 ? 0 : outer > 1 ? 1 : outer;
+                inner = inner < 0 ? 0 : inner > 1 ? 1 : inner;
+                float cov = outer - inner;
+                if (cov > 0.004f)
+                    put(s, x, y, c, (int)(a * cov));
             }
-            float d = sd_rrect(x + 0.5f, y + 0.5f, cx, cy, hw, hh, (float)rad);
-            float outer = 0.5f - d, inner = 0.5f - (d + width);
-            outer = outer < 0 ? 0 : outer > 1 ? 1 : outer;
-            inner = inner < 0 ? 0 : inner > 1 ? 1 : inner;
-            float cov = outer - inner;
-            if (cov > 0.004f)
-                put(s, x, y, c, (int)(a * cov));
-        }
     }
 }
 
@@ -327,34 +334,123 @@ void draw_line(Surf *s, float x0, float y0, float x1, float y1, float width, uin
 /* Gölge                                                               */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Gölge, 9 parçalı önbellekle çizilir: (yarıçap, bulanıklık) çifti için bir köşe
+ * tablosu ve bir kenar profili bir kez hesaplanır; sonra her piksel yalnızca tablo
+ * okuma + tamsayı karıştırmadır (karekök yok). Pencerenin örttüğü iç kısım atlanır.
+ */
+typedef struct {
+    int rad, blur, n;   /* n = rad + blur: köşe karesinin kenarı */
+    uint8_t *corner;    /* n*n, [j*n+i]: köşe merkezinden (i+.5, j+.5) uzaklıktaki yoğunluk */
+    uint8_t *edge;      /* blur: kenardan k+.5 uzaklıktaki yoğunluk */
+} ShadowTab;
+
+static ShadowTab shtab[6];
+static int nshtab;
+
+static uint8_t falloff(float d, float blur)
+{
+    if (d <= 0)
+        return 255;
+    float t = d / blur;
+    if (t >= 1)
+        return 0;
+    float f = 1 - t;
+    return (uint8_t)(255 * f * f * f + 0.5f);
+}
+
+static ShadowTab *shadow_tab(int rad, int blur)
+{
+    for (int i = 0; i < nshtab; i++)
+        if (shtab[i].rad == rad && shtab[i].blur == blur)
+            return &shtab[i];
+    ShadowTab *t = &shtab[nshtab < 6 ? nshtab++ : 5];
+    if (t->corner) {
+        free(t->corner);
+        free(t->edge);
+    }
+    t->rad = rad;
+    t->blur = blur;
+    t->n = rad + blur;
+    t->corner = malloc((size_t)t->n * t->n);
+    t->edge = malloc((size_t)blur);
+    for (int j = 0; j < t->n; j++)
+        for (int i = 0; i < t->n; i++)
+            t->corner[j * t->n + i] = falloff(sqrtf((i + .5f) * (i + .5f) + (j + .5f) * (j + .5f)) - rad, (float)blur);
+    for (int k = 0; k < blur; k++)
+        t->edge[k] = falloff(k + .5f, (float)blur);
+    return t;
+}
+
+static inline void shade(uint32_t *p, int a)
+{
+    /* siyahla karıştır: renk * (255 - a) / 255 */
+    if (!a)
+        return;
+    uint32_t ia = 255 - (uint32_t)a;
+    uint32_t v = *p;
+    uint32_t rb = (((v & 0xFF00FF) * ia + 0x800080) >> 8) & 0xFF00FF;
+    uint32_t g = (((v & 0x00FF00) * ia + 0x008000) >> 8) & 0x00FF00;
+    *p = 0xFF000000u | rb | g;
+}
+
 void draw_shadow(Surf *s, Rect r, int rad, int blur, int dy, int alpha)
 {
+    if (blur < 1)
+        return;
     Rect sr = { r.x, r.y + dy, r.w, r.h };
+    rad = mini(rad, mini(sr.w, sr.h) / 2);
     Rect bb = { sr.x - blur, sr.y - blur, sr.w + 2 * blur, sr.h + 2 * blur };
     Rect k = rect_isect(bb, s->clip);
     if (rect_empty(k))
         return;
-    float cx = sr.x + sr.w / 2.0f, cy = sr.y + sr.h / 2.0f, hw = sr.w / 2.0f, hh = sr.h / 2.0f;
-    float inv = 1.0f / blur;
-    /* Pencerenin kendisinin kesin örteceği alan (köşeler hariç) atlanır */
-    int sx0 = r.x + rad, sx1 = r.x + r.w - rad;
+    ShadowTab *t = shadow_tab(rad, blur);
+    int n = t->n;
+    /* şeklin düz kenarlarının başladığı/bittiği yerler */
+    int lx = sr.x + rad, rx = sr.x + sr.w - rad; /* [lx, rx) yatay düz bölge */
+    int ty = sr.y + rad, by = sr.y + sr.h - rad; /* [ty, by) dikey düz bölge */
+    int kx1 = k.x + k.w;
     for (int y = k.y; y < k.y + k.h; y++) {
-        int covered_row = y >= r.y && y < r.y + r.h;
-        for (int x = k.x; x < k.x + k.w; x++) {
-            if (covered_row && x >= sx0 && x < sx1) {
-                x = sx1 - 1;
-                continue;
+        uint32_t *row = &s->px[y * s->stride];
+        /* pencerenin kesin örttüğü yatay aralık (bu satırda) */
+        int cov0 = 0, cov1 = 0;
+        if (y >= r.y && y < r.y + r.h) {
+            int in_corner_rows = y < r.y + rad || y >= r.y + r.h - rad;
+            cov0 = in_corner_rows ? r.x + rad : r.x;
+            cov1 = in_corner_rows ? r.x + r.w - rad : r.x + r.w;
+        }
+        int vj = y < ty ? ty - 1 - y : y >= by ? y - by : -1; /* köşe tablosu satırı */
+        int ve = y < sr.y ? sr.y - 1 - y : y >= sr.y + sr.h ? y - (sr.y + sr.h) : -1;
+        /* orta bölüm [lx, rx): tüm satır için sabit yoğunluk */
+        int mid = ve < 0 ? 255 : ve < blur ? t->edge[ve] : 0;
+        int am = mid * alpha / 255;
+        if (am) {
+            int x0 = maxi(k.x, lx), x1 = mini(kx1, rx);
+            for (int x = x0; x < x1; x++) {
+                if (x >= cov0 && x < cov1) {
+                    x = cov1 - 1;
+                    continue;
+                }
+                shade(&row[x], am);
             }
-            if (covered_row && y >= r.y + rad && y < r.y + r.h - rad && x >= r.x && x < r.x + r.w) {
-                continue;
+        }
+        /* sol ve sağ uçlar: köşe tablosu ya da yatay kenar profili */
+        for (int side = 0; side < 2; side++) {
+            int x0 = side ? maxi(k.x, rx) : k.x, x1 = side ? kx1 : mini(kx1, lx);
+            for (int x = x0; x < x1; x++) {
+                if (x >= cov0 && x < cov1)
+                    continue;
+                int hi = side ? x - rx : lx - 1 - x;
+                int a;
+                if (vj >= 0) {
+                    a = (hi < n && vj < n) ? t->corner[vj * n + hi] : 0;
+                } else {
+                    int ex = side ? x - (sr.x + sr.w) : sr.x - 1 - x;
+                    a = ex < 0 ? 255 : ex < blur ? t->edge[ex] : 0;
+                }
+                if (a)
+                    shade(&row[x], a * alpha / 255);
             }
-            float d = sd_rrect(x + 0.5f, y + 0.5f, cx, cy, hw, hh, (float)rad);
-            float t = d <= 0 ? 0 : d * inv;
-            if (t >= 1)
-                continue;
-            float f = (1 - t);
-            f = f * f * f;
-            put(s, x, y, 0, (int)(alpha * f));
         }
     }
 }

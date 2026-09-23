@@ -38,10 +38,18 @@ static void a_init(Win *w, const char *arg)
         sscanf(buf, "MemTotal: %ld", &kb);
         fmt_size(st->mem, sizeof st->mem, (long long)kb * 1024);
     }
-    snprintf(st->axs, sizeof st->axs, "yükleniyor…");
-    char *argv[] = { "axs", "-s", NULL };
-    if (proc_start(&st->axsp, argv) < 0)
-        snprintf(st->axs, sizeof st->axs, "bulunamadı");
+    /* Axs sürümünü kaynak dosyasından oku (python başlatmak yavaş makinede saniyeler sürer) */
+    snprintf(st->axs, sizeof st->axs, "bulunamadı");
+    st->axsp.fd = -1;
+    st->axsp.done = 1;
+    if (read_file("/usr/lib/axs/axslang/surum.py", buf, sizeof buf) > 0) {
+        char *p = strstr(buf, "SURUM = \"");
+        if (p) {
+            p += 9;
+            p[strcspn(p, "\"")] = 0;
+            snprintf(st->axs, sizeof st->axs, "Axs %s", p);
+        }
+    }
 }
 
 static void action_card(Surf *s, UiState *u, Rect r, IconId ic, const char *title, const char *sub, const App *app)

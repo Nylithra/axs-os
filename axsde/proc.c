@@ -1,4 +1,5 @@
 /* AxsDE - alt süreç çalıştırma (arayüzü dondurmadan) */
+#define _GNU_SOURCE
 #include "axsde.h"
 
 #include <errno.h>
