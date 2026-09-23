@@ -8,7 +8,7 @@ set -euo pipefail
 TOOLS=(
     gcc:build-essential make:build-essential strip:binutils perl:perl
     flex:flex bison:bison bc:bc rsync:rsync cpio:cpio xz:xz-utils gzip:gzip
-    git:git curl:curl file:file musl-gcc:musl-tools
+    git:git curl:curl file:file python3:python3 musl-gcc:musl-tools
     qemu-system-x86_64:qemu-system-x86
     grub-mkrescue:grub-common xorriso:xorriso mformat:mtools
 )

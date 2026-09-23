@@ -7,6 +7,9 @@
  * - /etc/rc varsa çalıştırır (ağ vb. açılış işleri)
  * - her etkin konsolda (ör. ekran tty1 + seri ttyS0) logo basıp shell başlatır
  *   (/bin/axsh, yoksa /bin/sh); shell kapanınca yeniden açar
+ * - ekran konsolunda (tty1) framebuffer varsa AxsDE masaüstünü başlatır
+ *   (çekirdek parametresi axs.gui=0 ile kapatılır; masaüstünden "metin
+ *   konsoluna geç" denirse ya da art arda çökerse o konsolda shell açılır)
  * - yetim süreçleri toplar
  * - poweroff / reboot / halt sinyallerini işler (BusyBox ile uyumlu:
  *   SIGUSR2 = kapat, SIGTERM = yeniden başlat, SIGUSR1 = durdur)
@@ -34,10 +37,15 @@
 static const char *SHELLS[] = { "/bin/axsh", "/bin/sh", NULL };
 
 #define MAX_TTYS 4
+#define DESKTOP  "/usr/bin/axsde"
+
 static struct {
     char dev[64];
     pid_t pid;
     time_t last_spawn;
+    int gui;        /* bu konsolda masaüstü çalışsın */
+    int is_gui;     /* şu an çalışan süreç masaüstü mü */
+    int gui_fails;  /* hızlı çöküş sayısı */
 } ttys[MAX_TTYS];
 static int nttys;
 
@@ -178,6 +186,21 @@ static void run_rc(void)
         ;
 }
 
+/* Masaüstü kullanılabilir mi: framebuffer + axsde var, axs.gui=0 verilmemiş */
+static int gui_wanted(void)
+{
+    char cmd[1024] = "";
+    FILE *f = fopen("/proc/cmdline", "r");
+    if (f) {
+        if (!fgets(cmd, sizeof cmd, f))
+            cmd[0] = 0;
+        fclose(f);
+    }
+    if (strstr(cmd, "axs.gui=0"))
+        return 0;
+    return access("/dev/fb0", R_OK | W_OK) == 0 && access(DESKTOP, X_OK) == 0;
+}
+
 /* Etkin konsolları bul: "tty0 ttyS0" -> /dev/tty1, /dev/ttyS0 */
 static void find_consoles(void)
 {
@@ -195,6 +218,7 @@ static void find_consoles(void)
         if (access(dev, R_OK | W_OK) != 0)
             continue;
         snprintf(ttys[nttys].dev, sizeof ttys[nttys].dev, "%s", dev);
+        ttys[nttys].gui = !strcmp(dev, "/dev/tty1") && gui_wanted();
         ttys[nttys++].pid = -1;
     }
     if (!nttys) {
@@ -204,10 +228,12 @@ static void find_consoles(void)
     }
 }
 
-static pid_t spawn_shell(const char *tty)
+static pid_t spawn_shell(const char *tty, int gui)
 {
     const char *sh = NULL;
-    for (int i = 0; SHELLS[i]; i++)
+    if (gui)
+        sh = DESKTOP;
+    for (int i = 0; !sh && SHELLS[i]; i++)
         if (access(SHELLS[i], X_OK) == 0) {
             sh = SHELLS[i];
             break;
@@ -231,9 +257,14 @@ static pid_t spawn_shell(const char *tty)
                 close(fd);
         }
         tcsetpgrp(0, getpid());
+        if (gui) {
+            if (chdir("/root") < 0) { /* yok say */ }
+            execl(sh, "axsde", (char *)NULL);
+            _exit(127);
+        }
         print_logo();
         setenv("SHELL", sh, 1);
-        chdir("/root");
+        if (chdir("/root") < 0) { /* yok say */ }
         const char *base = strrchr(sh, '/') + 1;
         char argv0[64];
         snprintf(argv0, sizeof argv0, "-%s", base); /* login shell */
@@ -286,7 +317,8 @@ int main(void)
             if (time(NULL) - ttys[i].last_spawn < 2)
                 sleep(2);
             ttys[i].last_spawn = time(NULL);
-            ttys[i].pid = spawn_shell(ttys[i].dev);
+            ttys[i].is_gui = ttys[i].gui;
+            ttys[i].pid = spawn_shell(ttys[i].dev, ttys[i].gui);
         }
         int st;
         pid_t pid = wait(&st);
@@ -298,8 +330,20 @@ int main(void)
         for (int i = 0; i < nttys; i++)
             if (pid == ttys[i].pid) {
                 ttys[i].pid = -1;
-                if (!shutdown_req)
+                if (shutdown_req)
+                    continue;
+                if (ttys[i].is_gui) {
+                    int quick = time(NULL) - ttys[i].last_spawn < 10;
+                    int clean = WIFEXITED(st) && WEXITSTATUS(st) == 0;
+                    if (clean) {
+                        ttys[i].gui = 0; /* kullanıcı metin konsolunu seçti */
+                    } else if (quick && ++ttys[i].gui_fails >= 3) {
+                        msg("Masaüstü açılamadı, %s üzerinde kabuk başlatılıyor", ttys[i].dev);
+                        ttys[i].gui = 0;
+                    }
+                } else {
                     msg("%s üzerindeki shell kapandı, yeniden başlatılıyor...", ttys[i].dev);
+                }
             }
     }
 }
