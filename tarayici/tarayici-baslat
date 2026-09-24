@@ -35,6 +35,8 @@ BASLIKSIZ=
 [ "${1:-}" = --basliksiz ] && { BASLIKSIZ=1; shift; }
 app="${1:-}"
 [ $# -gt 0 ] && shift
+# chroot içinde kullanıcı ad alanı açılamaz; Chrome'un setuid korumalı alanı yoksa korumasız çalış
+if [ "$app" != firefox ] && [ ! -u "$R/opt/google/chrome/chrome-sandbox" ]; then TARAYICI_KORUMASIZ=1; fi
 case "$app" in
 firefox)
     BIN=/opt/firefox/firefox; PAT=/opt/firefox/; D=1; TITLE=Firefox; PAKET=firefox
@@ -50,6 +52,9 @@ if [ ! -x "$R$BIN" ]; then
     echo "$TITLE kurulu değil. Kurmak için: axpkg install $PAKET" >&2
     exit 1
 fi
+
+# chroot'un temel dizinleri herkes tarafından okunabilir olmalı (tarayıcı uid 1000 ile çalışır)
+chmod 755 "$R" "$R/opt" "$R/usr" "$R/usr/lib" "$R/usr/bin" 2>/dev/null
 
 # --- chroot bağlamaları (bir kez) ---
 bagla /proc && bagla /sys && bagla /dev && bagla /dev/pts && bagla /dev/shm && bagla /tmp \

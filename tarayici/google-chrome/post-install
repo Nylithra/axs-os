@@ -11,10 +11,15 @@ if ! curl -fL --retry 3 --connect-timeout 20 ${AXPKG_PROGRESS:+--progress-bar} -
 fi
 echo "Paket açılıyor..."
 rm -rf "$R/opt/google/chrome"
-if ! chroot "$R" dpkg-deb -x /opt/.chrome-indir/chrome.deb /; then
+# Doğrudan / içine açmak chroot'taki dizinlerin izinlerini değiştirir; ayrı dizine açıp
+# yalnızca /opt/google'ı taşı.
+if ! chroot "$R" dpkg-deb -x /opt/.chrome-indir/chrome.deb /opt/.chrome-indir/ac \
+    || [ ! -x "$D/ac/opt/google/chrome/chrome" ]; then
     echo "HATA: paket açılamadı" >&2; rm -rf "$D"; exit 1
 fi
-rm -rf "$D" "$R/etc/cron.daily/google-chrome"
+mkdir -p "$R/opt/google"
+mv "$D/ac/opt/google/chrome" "$R/opt/google/chrome"
+rm -rf "$D"
 # korumalı alan yardımcısı (setuid gerekmez; kullanıcı ad alanları kullanılır)
 V=$(chroot "$R" /opt/google/chrome/chrome --version 2>/dev/null)
 echo "${V:-Google Chrome} kuruldu. Başlatmak için: google-chrome (ya da Market'te Aç)"

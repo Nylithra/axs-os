@@ -1,5 +1,5 @@
 #!/bin/sh
 pkill -f '^/opt/google/chrome/' 2>/dev/null
 sleep 1
-rm -rf /opt/tarayici/opt/google /opt/tarayici/usr/bin/google-chrome*
+rm -rf /opt/tarayici/opt/google
 exit 0
