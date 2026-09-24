@@ -1,6 +1,13 @@
-/* AxsDE - Ayarlar: görünüm, klavye, saat, sistem */
+/* AxsDE - Ayarlar: görünüm, klavye, saat, ağ, sistem */
 #include "axsde.h"
 
+#include <arpa/inet.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,8 +22,9 @@ typedef struct {
     TextField test;
 } SetSt;
 
-static const char *PAGES[] = { "Görünüm", "Klavye", "Tarih ve saat", "Sistem" };
-static const IconId PAGE_IC[] = { IC_SETTINGS, IC_KEYBOARD, IC_CLOCK, IC_CPU };
+static const char *PAGES[] = { "Görünüm", "Klavye", "Tarih ve saat", "Ağ", "Sistem" };
+static const IconId PAGE_IC[] = { IC_SETTINGS, IC_KEYBOARD, IC_CLOCK, IC_NETWORK, IC_CPU };
+#define N_PAGES 5
 
 static void make_thumbs(SetSt *st)
 {
@@ -152,6 +160,135 @@ static void page_time(Surf *s, SetSt *st, UiState *u, Rect a)
     }
 }
 
+/* Arka planda komut çalıştır (beklemeden; çift fork, zombi kalmaz) */
+static void spawn_bg(char *const argv[])
+{
+    pid_t p = fork();
+    if (p == 0) {
+        if (fork() == 0) {
+            setsid();
+            int nul = open("/dev/null", O_RDWR);
+            if (nul >= 0) {
+                dup2(nul, 0);
+                dup2(nul, 1);
+                dup2(nul, 2);
+            }
+            for (int fd = 3; fd < 1024; fd++)
+                close(fd);
+            execv(argv[0], argv);
+            _exit(127);
+        }
+        _exit(0);
+    }
+    if (p > 0)
+        waitpid(p, NULL, 0);
+}
+
+static void sysfs_str(const char *ifname, const char *attr, char *out, size_t n)
+{
+    char p[160];
+    snprintf(p, sizeof p, "/sys/class/net/%s/%s", ifname, attr);
+    out[0] = 0;
+    if (read_file(p, out, n) > 0)
+        out[strcspn(out, "\n")] = 0;
+}
+
+/* Ağ: gerçek ağ kartları (sürücü, bağlantı, adres), ağ geçidi, DNS */
+static void page_network(Surf *s, SetSt *st, UiState *u, Rect a)
+{
+    (void)st;
+    int y = a.y;
+    section(s, a.x, y, "Ağ bağlantıları", "Kablolu (Ethernet) ve sanal makine ağ kartları; adres DHCP ile alınır");
+    y += 52;
+    DIR *d = opendir("/sys/class/net");
+    struct dirent *e;
+    int cards = 0;
+    while (d && (e = readdir(d)) && y < a.y + a.h - 150) {
+        if (e->d_name[0] == '.' || !strcmp(e->d_name, "lo"))
+            continue;
+        char p[160], drv[128], oper[32], carrier[8], mac[32], speed[16], ip[64] = "adres yok";
+        snprintf(p, sizeof p, "/sys/class/net/%s/device/driver", e->d_name);
+        char link[256];
+        ssize_t k = readlink(p, link, sizeof link - 1);
+        if (k <= 0)
+            continue; /* sanal arayüz (sit0, tünel vb.): gerçek bir kart değil */
+        link[k] = 0;
+        snprintf(drv, sizeof drv, "%s", strrchr(link, '/') ? strrchr(link, '/') + 1 : link);
+        sysfs_str(e->d_name, "operstate", oper, sizeof oper);
+        sysfs_str(e->d_name, "carrier", carrier, sizeof carrier);
+        sysfs_str(e->d_name, "address", mac, sizeof mac);
+        sysfs_str(e->d_name, "speed", speed, sizeof speed);
+        struct ifaddrs *ifs = NULL;
+        if (getifaddrs(&ifs) == 0) {
+            for (struct ifaddrs *ia = ifs; ia; ia = ia->ifa_next)
+                if (ia->ifa_addr && ia->ifa_addr->sa_family == AF_INET && !strcmp(ia->ifa_name, e->d_name))
+                    inet_ntop(AF_INET, &((struct sockaddr_in *)ia->ifa_addr)->sin_addr, ip, sizeof ip);
+            freeifaddrs(ifs);
+        }
+        int up = !strcmp(carrier, "1") && strcmp(ip, "adres yok");
+        Rect r = { a.x, y, a.w, 92 };
+        fill_rrect(s, r, 12, T.surface2);
+        draw_icon(s, IC_NETWORK, r.x + 16, r.y + 16, 28);
+        char title[96];
+        snprintf(title, sizeof title, "%s  —  %s", e->d_name, drv);
+        draw_text(s, F_UI_BOLD, 15, r.x + 56, r.y + 14, T.text, title);
+        const char *state = up ? "Bağlı" : !strcmp(carrier, "1") ? "Adres bekleniyor" : "Kablo takılı değil";
+        ui_badge(s, r.x + r.w - 150, r.y + 14, state, ALPHA(up ? T.green : T.yellow, 50), up ? T.green : T.yellow);
+        char l1[160], l2[160];
+        snprintf(l1, sizeof l1, "IPv4: %s", ip);
+        long sp = atol(speed);
+        char spd[32] = "-";
+        if (sp >= 1000)
+            snprintf(spd, sizeof spd, "%ld Gbit/sn", sp / 1000);
+        else if (sp > 0)
+            snprintf(spd, sizeof spd, "%ld Mbit/sn", sp);
+        snprintf(l2, sizeof l2, "MAC: %s   •   Hız: %s", mac, spd);
+        draw_text(s, F_MONO, 13, r.x + 56, r.y + 42, up ? T.text : T.subtext, l1);
+        draw_text(s, F_UI, 12, r.x + 56, r.y + 64, T.muted, l2);
+        y += 102;
+        cards++;
+    }
+    if (d)
+        closedir(d);
+    if (!cards) {
+        draw_text(s, F_UI, 14, a.x, y, T.subtext, "Ağ kartı bulunamadı.");
+        y += 30;
+    }
+    /* ağ geçidi ve DNS */
+    char gw[64] = "-", dns[160] = "", buf[4096];
+    if (read_file("/proc/net/route", buf, sizeof buf) > 0) {
+        for (char *ln = strtok(buf, "\n"); ln; ln = strtok(NULL, "\n")) {
+            char ifn[32];
+            unsigned dst, g;
+            if (sscanf(ln, "%31s %x %x", ifn, &dst, &g) == 3 && dst == 0 && g) {
+                struct in_addr ga = { g };
+                inet_ntop(AF_INET, &ga, gw, sizeof gw);
+                break;
+            }
+        }
+    }
+    if (read_file("/etc/resolv.conf", buf, sizeof buf) > 0)
+        for (char *ln = strtok(buf, "\n"); ln; ln = strtok(NULL, "\n"))
+            if (!strncmp(ln, "nameserver ", 11) && strlen(dns) + strlen(ln + 11) + 3 < sizeof dns) {
+                if (dns[0])
+                    strcat(dns, ", ");
+                strcat(dns, ln + 11);
+            }
+    char info[256];
+    snprintf(info, sizeof info, "Ağ geçidi: %s     DNS: %s", gw, dns[0] ? dns : "-");
+    draw_text(s, F_UI, 13, a.x, y + 4, T.subtext, info);
+    y += 34;
+    if (ui_button(s, u, (Rect){ a.x, y, 170, 38 }, "Yeniden bağlan", BTN_PRIMARY)) {
+        char *argv[] = { "/sbin/ag", "yenile", NULL };
+        spawn_bg(argv);
+        wm_notify("Ağ", "DHCP ile yeniden adres isteniyor...", IC_NETWORK);
+    }
+    if (ui_button(s, u, (Rect){ a.x + 180, y, 190, 38 }, "Bağlantıyı sına", BTN_NORMAL))
+        wm_run_in_terminal("ag durum; echo; ag test", "Ağ testi");
+    draw_text_wrap(s, F_UI, 11, a.x, y + 52, a.w, 2, 15, T.muted,
+                   "Kablosuz (Wi-Fi) kartlar henüz desteklenmiyor. Elle adres: terminalde \"ag sabit eth0 192.168.1.50/24 192.168.1.1\"");
+}
+
 static void page_system(Surf *s, SetSt *st, UiState *u, Rect a)
 {
     (void)st;
@@ -202,7 +339,7 @@ static void s_draw(Win *w, Surf *s)
     Rect side = { 0, 0, 200, s->h };
     fill_rect(s, side, T.base);
     fill_rect(s, (Rect){ side.w - 1, 0, 1, s->h }, T.border);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < N_PAGES; i++) {
         Rect r = { 10, 14 + i * 44, side.w - 20, 38 };
         int sel = i == st->page;
         int hov = ui_hover(u, r);
@@ -222,7 +359,8 @@ static void s_draw(Win *w, Surf *s)
     case 0: page_look(s, st, u, a); break;
     case 1: page_keyboard(s, st, u, a); break;
     case 2: page_time(s, st, u, a); break;
-    case 3: page_system(s, st, u, a); break;
+    case 3: page_network(s, st, u, a); break;
+    case 4: page_system(s, st, u, a); break;
     }
     s->clip = old;
 }
@@ -246,7 +384,7 @@ static void s_tick(Win *w)
 {
     SetSt *st = w->st;
     static int n;
-    if ((st->page == 2 || st->page == 3) && ++n % 4 == 0) /* saniyede bir */
+    if ((st->page == 2 || st->page == 3 || st->page == 4) && ++n % 4 == 0) /* saniyede bir */
         w->dirty = 1;
 }
 
@@ -259,7 +397,7 @@ static void s_close(Win *w)
 }
 
 const App APP_SETTINGS = {
-    .id = "ayarlar", .name = "Ayarlar", .desc = "Görünüm, klavye, saat",
+    .id = "ayarlar", .name = "Ayarlar", .desc = "Görünüm, klavye, saat, ağ",
     .icon = IC_SETTINGS, .w = 760, .h = 520, .single = 1,
     .init = s_init, .draw = s_draw, .mouse = s_mouse, .key = s_key, .tick = s_tick, .close = s_close,
 };

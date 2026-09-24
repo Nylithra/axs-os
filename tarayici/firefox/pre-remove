@@ -1,0 +1,5 @@
+#!/bin/sh
+pkill -f '^/opt/firefox/' 2>/dev/null
+sleep 1
+rm -rf /opt/tarayici/opt/firefox
+exit 0

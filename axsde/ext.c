@@ -181,6 +181,10 @@ static void handle(Client *c, AdpMsg *m)
         w->st = c;
         c->win = w;
         const AppEntry *e = apps_find(c->id);
+        if (!e) { /* terminalden yeni kurulmuş olabilir: kaydı yeniden tara */
+            apps_scan();
+            e = apps_find(c->id);
+        }
         if (e) {
             c->entry = *e;
             w->entry = &c->entry;

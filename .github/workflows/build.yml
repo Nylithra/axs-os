@@ -47,6 +47,15 @@ jobs:
       - name: ISO açılış testi (metin + masaüstü)
         run: scripts/ci-test.sh
 
+      - name: Tarayıcı paketleri (Ubuntu kütüphaneleri + Xvfb + xkopru köprüsü)
+        run: |
+          sudo apt-get install -y debootstrap
+          sudo -E env "PATH=$PATH" ./build.sh tarayici
+          sudo chown -R "$(id -u):$(id -g)" build
+
+      - name: Tarayıcı uçtan uca testi (Firefox ve Chrome resmi kaynaklardan kurulup açılır)
+        run: scripts/ci-tarayici-test.sh
+
       - name: Sürüm bilgisi
         id: info
         run: |
@@ -66,6 +75,10 @@ jobs:
             build/out/SHA256SUMS
             build/out/ekran.png
             build/out/test-seri.log
+            build/out/tarayici-seri.log
+            build/out/firefox.png
+            build/out/chrome.png
+            build/out/firefox-masaustu.png
           compression-level: 0
           if-no-files-found: ignore
 
@@ -74,21 +87,26 @@ jobs:
           cat > build/out/NOTLAR.md <<EOF
           ## AxsOS — Axs dilinin evi
 
-          Linux 6.12 LTS tabanlı, masaüstü (AxsDE), Axs dili, axsh kabuğu ve axpkg paket
+          Linux 6.12 LTS tabanlı, masaüstü (AxsDE), Axs dili, bash kabuğu ve axpkg paket
           yöneticisiyle gelen minimal dağıtım. Bu ISO derlendikten sonra QEMU'da açılıp
-          otomatik olarak test edildi (metin kipi + masaüstü).
+          otomatik olarak test edildi (metin kipi + masaüstü + Firefox/Chrome kurulumu).
+
+          **Tarayıcılar:** kurulu gelmez; Uygulama Marketi'nden (İnternet) ya da terminalden
+          \`axpkg install firefox\` / \`axpkg install google-chrome\` ile internetten kurulur.
+          Tarayıcı için sanal makineye en az 3-4 GB bellek verin.
 
           - Commit: \`${{ steps.info.outputs.short }}\` · Tarih: ${{ steps.info.outputs.date }} · Boyut: ${{ steps.info.outputs.size }}
           - BIOS ve UEFI ile açılır (hibrit ISO); USB belleğe doğrudan yazılabilir.
 
           ### QEMU ile çalıştır
           \`\`\`sh
-          qemu-system-x86_64 -m 1G -cdrom axsos.iso -device virtio-tablet-pci -device virtio-keyboard-pci
+          qemu-system-x86_64 -m 4G -smp 2 -cdrom axsos.iso -nic user,model=e1000 -device virtio-tablet-pci -device virtio-keyboard-pci
           \`\`\`
           (Linux'ta \`-enable-kvm\` eklemek çok hızlandırır.)
 
           ### VirtualBox / VMware
-          Yeni sanal makine: Linux 64-bit, 1 GB bellek, disk gerekmez; ISO'yu CD olarak takıp başlat.
+          Yeni sanal makine: Linux 64-bit, 4 GB bellek (tarayıcısız 2 GB yeter), disk gerekmez;
+          ağ kartı: Intel PRO/1000 (varsayılan) ya da virtio. ISO'yu CD olarak takıp başlat.
 
           ### USB bellek
           Linux: \`sudo dd if=axsos.iso of=/dev/sdX bs=4M status=progress\` ·
@@ -97,13 +115,24 @@ jobs:
           Giriş parolası yoktur; masaüstü kendiliğinden açılır. GRUB menüsünde metin kipi de vardır.
           EOF
 
+      - name: Paket deposunu yayınla (AxsOS'ta "axpkg update" buradan okur)
+        if: github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view paketler >/dev/null 2>&1 || gh release create paketler \
+            --title "AxsOS paket deposu" --prerelease --target "$GITHUB_SHA" \
+            --notes "axpkg uzak deposu (INDEX + .axp). AxsOS içinde: axpkg update && axpkg install firefox"
+          gh release upload paketler build/uzak-depo/* --clobber
+
       - name: Son sürüm yayınını güncelle
         if: github.ref_type == 'branch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete son-surum --yes --cleanup-tag 2>/dev/null || true
-          gh release create son-surum build/out/axsos.iso build/out/SHA256SUMS build/out/ekran.png \
+          EK=""; for f in firefox-masaustu.png firefox.png chrome.png; do [ -f "build/out/$f" ] && EK="$EK build/out/$f"; done
+          gh release create son-surum build/out/axsos.iso build/out/SHA256SUMS build/out/ekran.png $EK \
             --title "AxsOS son sürüm (${{ steps.info.outputs.short }})" \
             --notes-file build/out/NOTLAR.md --prerelease --target "$GITHUB_SHA"
 

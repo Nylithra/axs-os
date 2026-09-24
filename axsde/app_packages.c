@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
+#include <time.h>
 
 #define REPO "/var/lib/axpkg/repo"
 #define DB "/var/lib/axpkg/db"
@@ -17,12 +19,15 @@ typedef struct {
     char depends[128], file[128], app[64], run[128], open[160], icon[160];
     char inst_version[32];
     long size, isize;
+    long extra;       /* kurulumda ayrıca indirilen (ör. tarayıcının kendisi) */
     int installed;
+    int remote;       /* uzak depoda: kurulurken internetten indirilir */
 } Pkg;
 
-static const char *CATS[] = { "Keşfet", "Oyunlar", "Araçlar", "Grafik", "Axs", "Sistem", "Kurulu" };
-#define N_CATS 7
-#define CAT_INSTALLED 6
+static const char *CATS[] = { "Keşfet", "İnternet", "Oyunlar", "Araçlar", "Grafik", "Axs", "Sistem", "Kurulu" };
+#define N_CATS 8
+#define CAT_INSTALLED 7
+#define REMOTE "/var/lib/axpkg/remote"
 
 typedef struct {
     UiState ui;
@@ -35,6 +40,7 @@ typedef struct {
     Proc job;
     int busy, busy_install, spin;
     char busy_name[64];
+    int updating;     /* axpkg update sürüyor */
     char log[2048];
 } MarketSt;
 
@@ -49,13 +55,60 @@ static void set_field(Pkg *p, const char *k, const char *v)
     F("app", app); F("run", run); F("open", open);
     else if (!strcmp(k, "size")) p->size = atol(v);
     else if (!strcmp(k, "installed_size")) p->isize = atol(v);
+    else if (!strcmp(k, "extra_size")) p->extra = atol(v);
 #undef F
 }
 
-static void reload(MarketSt *st)
+/* sürüm karşılaştırma: sayısal parçalara göre */
+static int vcmp(const char *a, const char *b)
 {
-    st->n = 0;
-    FILE *f = fopen(REPO "/INDEX", "r");
+    while (*a || *b) {
+        if (*a >= '0' && *a <= '9' && *b >= '0' && *b <= '9') {
+            long x = strtol(a, (char **)&a, 10), y = strtol(b, (char **)&b, 10);
+            if (x != y)
+                return x < y ? -1 : 1;
+        } else {
+            if (*a != *b)
+                return (unsigned char)*a - (unsigned char)*b;
+            a++, b++;
+        }
+    }
+    return 0;
+}
+
+static void add_pkg(MarketSt *st, Pkg *cur, int remote)
+{
+    if (!cur->name[0])
+        return;
+    if (!cur->title[0])
+        snprintf(cur->title, sizeof cur->title, "%s", cur->name);
+    if (!cur->category[0])
+        snprintf(cur->category, sizeof cur->category, "Sistem");
+    snprintf(cur->icon, sizeof cur->icon, "%s/icons/%s.png", remote ? REMOTE : REPO, cur->name);
+    cur->remote = remote;
+    /* aynı paket hem yerelde hem uzakta: yeni sürüm kazanır, eşitse yerel */
+    for (int i = 0; i < st->n; i++)
+        if (!strcmp(st->pk[i].name, cur->name)) {
+            if (vcmp(cur->version, st->pk[i].version) > 0)
+                st->pk[i] = *cur;
+            return;
+        }
+    if (st->n >= MAXPKG)
+        return;
+    char mp[160], buf[2048];
+    snprintf(mp, sizeof mp, DB "/%s/MANIFEST", cur->name);
+    if (read_file(mp, buf, sizeof buf) > 0) {
+        cur->installed = 1;
+        char *v = strstr(buf, "version=");
+        if (v)
+            snprintf(cur->inst_version, sizeof cur->inst_version, "%.*s", (int)strcspn(v + 8, "\n"), v + 8);
+    }
+    st->pk[st->n++] = *cur;
+}
+
+static void parse_index(MarketSt *st, const char *path, int remote)
+{
+    FILE *f = fopen(path, "r");
     if (!f)
         return;
     char line[1024];
@@ -66,22 +119,7 @@ static void reload(MarketSt *st)
         if (r)
             line[strcspn(line, "\r\n")] = 0;
         if (!r || !line[0]) { /* kayıt sonu */
-            if (cur.name[0] && st->n < MAXPKG) {
-                if (!cur.title[0])
-                    snprintf(cur.title, sizeof cur.title, "%s", cur.name);
-                if (!cur.category[0])
-                    snprintf(cur.category, sizeof cur.category, "Sistem");
-                snprintf(cur.icon, sizeof cur.icon, REPO "/icons/%s.png", cur.name);
-                char mp[160], buf[2048];
-                snprintf(mp, sizeof mp, DB "/%s/MANIFEST", cur.name);
-                if (read_file(mp, buf, sizeof buf) > 0) {
-                    cur.installed = 1;
-                    char *v = strstr(buf, "version=");
-                    if (v)
-                        snprintf(cur.inst_version, sizeof cur.inst_version, "%.*s", (int)strcspn(v + 8, "\n"), v + 8);
-                }
-                st->pk[st->n++] = cur;
-            }
+            add_pkg(st, &cur, remote);
             memset(&cur, 0, sizeof cur);
             if (!r)
                 break;
@@ -94,6 +132,17 @@ static void reload(MarketSt *st)
         set_field(&cur, line, eq + 1);
     }
     fclose(f);
+}
+
+static void reload(MarketSt *st)
+{
+    st->n = 0;
+    parse_index(st, REPO "/INDEX", 0);
+    for (int i = 0; i < 16; i++) {
+        char p[96];
+        snprintf(p, sizeof p, REMOTE "/%d.INDEX", i);
+        parse_index(st, p, 1);
+    }
     /* grafik uygulamalar önce, sonra başlığa göre */
     for (int i = 1; i < st->n; i++) {
         Pkg k = st->pk[i];
@@ -131,6 +180,16 @@ static void pkg_icon(Surf *s, Pkg *p, int x, int y, int size)
 
 /* ---- işlemler ---- */
 
+static long mem_total_mb(void)
+{
+    char buf[256];
+    if (read_file("/proc/meminfo", buf, sizeof buf) <= 0)
+        return 0;
+    long kb = 0;
+    sscanf(buf, "MemTotal: %ld", &kb);
+    return kb / 1024;
+}
+
 static void start_job(Win *w, Pkg *p, int install)
 {
     MarketSt *st = w->st;
@@ -143,8 +202,27 @@ static void start_job(Win *w, Pkg *p, int install)
     }
     st->busy = 1;
     st->busy_install = install;
+    st->updating = 0;
     snprintf(st->busy_name, sizeof st->busy_name, "%s", p->name);
+    if (install && strstr(p->depends, "tarayici-ortami") && mem_total_mb() < 2800)
+        wm_notify("Bellek az olabilir", "Tarayıcılar için sanal makineye en az 3 GB bellek verin", IC_MEMORY);
     snprintf(st->log, sizeof st->log, "$ axpkg %s %s\n", install ? "install" : "remove", p->name);
+    w->dirty = 1;
+}
+
+/* Uzak depo dizinini (INDEX + simgeler) internetten yenile */
+static void start_update(Win *w)
+{
+    MarketSt *st = w->st;
+    if (st->busy)
+        return;
+    char *argv[] = { "axpkg", "update", NULL };
+    if (proc_start(&st->job, argv) < 0)
+        return;
+    st->busy = 1;
+    st->updating = 1;
+    st->busy_name[0] = 0;
+    snprintf(st->log, sizeof st->log, "Depo dizini indiriliyor...\n");
     w->dirty = 1;
 }
 
@@ -162,6 +240,19 @@ static void open_pkg(Pkg *p)
     } else if (p->open[0]) {
         wm_open_file(p->open);
     }
+}
+
+/* Kurulumda indirilecek toplam: paket + kurulu olmayan bağımlılıklar + kurulum betiğinin indirdikleri */
+static long download_total(MarketSt *st, Pkg *p)
+{
+    long t = (p->remote ? p->size : 0) + p->extra;
+    char deps[128];
+    snprintf(deps, sizeof deps, "%s", p->depends);
+    for (char *d = strtok(deps, " ,"); d; d = strtok(NULL, " ,"))
+        for (int i = 0; i < st->n; i++)
+            if (!strcmp(st->pk[i].name, d) && !st->pk[i].installed)
+                t += (st->pk[i].remote ? st->pk[i].size : 0) + st->pk[i].extra;
+    return t;
 }
 
 static int can_open(Pkg *p) { return p->app[0] || p->run[0] || p->open[0]; }
@@ -210,7 +301,9 @@ static void draw_sidebar(Win *w, Surf *s, UiState *u)
     Rect qr = { 14, 66, SB - 28, 34 };
     st->q.focus = 1;
     tf_draw(s, &st->q, qr, "Ara…");
-    static const IconId ICS[N_CATS] = { IC_HOME, IC_PLAY, IC_CLOCK, IC_FILE, IC_AXSFILE, IC_CPU, IC_PACKAGE };
+    if (ui_icon_button(s, u, (Rect){ SB - 46, 20, 32, 32 }, IC_REFRESH, "Depoyu yenile"))
+        start_update(w);
+    static const IconId ICS[N_CATS] = { IC_HOME, IC_NETWORK, IC_PLAY, IC_CLOCK, IC_FILE, IC_AXSFILE, IC_CPU, IC_PACKAGE };
     int y = 116;
     for (int i = 0; i < N_CATS; i++) {
         if (i == CAT_INSTALLED) {
@@ -243,8 +336,10 @@ static void draw_sidebar(Win *w, Surf *s, UiState *u)
         char tmp[2048];
         snprintf(tmp, sizeof tmp, "%s", st->log);
         char *last = NULL;
-        for (char *t = strtok(tmp, "\n"); t; t = strtok(NULL, "\n"))
-            last = t;
+        /* curl ilerleme çubuğu satırı \\r ile günceller: en son parçayı göster */
+        for (char *t = strtok(tmp, "\n\r"); t; t = strtok(NULL, "\n\r"))
+            if (strspn(t, " ") != strlen(t))
+                last = t;
         if (last) {
             /* renk kodlarını at */
             char clean[256], *o = clean;
@@ -260,7 +355,7 @@ static void draw_sidebar(Win *w, Surf *s, UiState *u)
             }
             *o = 0;
             fill_rrect(s, (Rect){ 10, H - 64, SB - 20, 52 }, 10, T.surface);
-            draw_text(s, F_UI_BOLD, 10, 20, H - 56, T.muted, "SON İŞLEM");
+            draw_text(s, F_UI_BOLD, 10, 20, H - 56, T.muted, st->busy ? "İŞLEM SÜRÜYOR" : "SON İŞLEM");
             draw_text_wrap(s, F_UI, 11, 20, H - 40, SB - 40, 2, 14, T.subtext, clean);
         }
     }
@@ -280,8 +375,14 @@ static void draw_card(Win *w, Surf *s, UiState *u, Rect r, int i)
     draw_text_fit(s, F_UI, 12, r.x + 90, r.y + 44, r.w - 104, T.muted, sub);
     draw_text_wrap(s, F_UI, 13, r.x + 16, r.y + 88, r.w - 32, 2, 18, T.subtext, p->desc);
     Rect b = { r.x + r.w - 104, r.y + r.h - 46, 88, 32 };
-    if (p->installed)
+    if (p->installed) {
         ui_badge(s, r.x + 16, r.y + r.h - 38, "✓ Kurulu", ALPHA(T.green, 50), T.green);
+    } else if (p->remote) {
+        char sz[32], t[48];
+        fmt_size(sz, sizeof sz, download_total(st, p));
+        snprintf(t, sizeof t, "İnternetten • ~%s", sz);
+        ui_badge(s, r.x + 16, r.y + r.h - 38, t, ALPHA(T.blue, 50), T.blue);
+    }
     action_button(w, s, u, b, p);
     /* kartın geri kalanına tıklama: ayrıntı */
     if (ui_clicked(u, r) && !rect_has(b, u->mx, u->my)) {
@@ -295,6 +396,9 @@ static void draw_hero(Win *w, Surf *s, UiState *u, Rect r)
     MarketSt *st = w->st;
     /* öne çıkan: kurulu olmayan ilk grafik uygulama (yoksa ilk uygulama) */
     int fi = -1;
+    for (int i = 0; i < st->n && fi < 0; i++) /* önce internetten kurulabilen uygulamalar (tarayıcılar) */
+        if (st->pk[i].app[0] && !st->pk[i].installed && st->pk[i].remote)
+            fi = i;
     for (int i = 0; i < st->n && fi < 0; i++)
         if (st->pk[i].app[0] && !st->pk[i].installed)
             fi = i;
@@ -359,7 +463,7 @@ static void draw_detail(Win *w, Surf *s, UiState *u, Rect area)
     Rect ib = { x + area.w - 240, y, 240, 206 };
     fill_rrect(s, ib, 14, T.surface2);
     char sz[32], isz[32];
-    fmt_kb(sz, sizeof sz, p->size);
+    fmt_kb(sz, sizeof sz, p->installed || download_total(st, p) < p->size ? p->size : download_total(st, p));
     fmt_kb(isz, sizeof isz, p->isize);
     const char *rows[5][2] = {
         { "Paket", p->name }, { "Sürüm", p->version }, { "İndirme", sz }, { "Kurulu boyut", isz },
@@ -446,7 +550,15 @@ static void m_init(Win *w, const char *arg)
     w->st = st;
     w->min_w = 760;
     w->min_h = 480;
+    setenv("AXPKG_PROGRESS", "1", 1); /* axpkg/curl indirme ilerlemesini yazsın */
     reload(st);
+    /* Uzak depo dizini yoksa ya da 6 saatten eskiyse ve ağ varsa arka planda yenile */
+    struct stat sb;
+    int stale = stat(REMOTE "/0.INDEX", &sb) != 0 || time(NULL) - sb.st_mtime > 6 * 3600;
+    char route[4096];
+    int online = read_file("/proc/net/route", route, sizeof route) > 0 && strstr(route, "\t00000000\t");
+    if (stale && online)
+        start_update(w);
 }
 
 static void m_mouse(Win *w, MouseEv *e)
@@ -502,10 +614,32 @@ static void m_io(Win *w, int fd)
     MarketSt *st = w->st;
     int done = proc_read(&st->job);
     if (st->job.out) {
-        size_t l = strlen(st->log);
-        snprintf(st->log + l, sizeof st->log - l, "%s", st->job.out);
+        /* günlük taşmasın: yalnızca sonu tutulur (curl ilerlemesi sürekli yazar) */
+        const size_t cap = sizeof st->log, half = cap / 2;
+        const char *add = st->job.out;
+        size_t n = strlen(add), l = strlen(st->log);
+        if (n > half) {
+            add += n - half;
+            n = half;
+        }
+        if (l + n >= cap - 1) {
+            size_t keep = half - 1;
+            memmove(st->log, st->log + (l - keep), keep + 1);
+            l = keep;
+        }
+        memcpy(st->log + l, add, n + 1);
         st->job.len = 0;
         st->job.out[0] = 0;
+    }
+    if (done && st->updating) {
+        int ok = st->job.status == 0;
+        wm_notify("Uygulama Marketi", ok ? "Uygulama listesi internetten güncellendi" :
+                  "Uzak depoya erişilemedi (internet bağlantısını denetleyin)", IC_NETWORK);
+        proc_free(&st->job);
+        st->busy = st->updating = 0;
+        reload(st);
+        w->dirty = 1;
+        return;
     }
     if (done) {
         int ok = st->job.status == 0;

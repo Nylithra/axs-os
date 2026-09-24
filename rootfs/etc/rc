@@ -1,9 +1,14 @@
 #!/bin/sh
 # AxsOS açılış betiği (init tarafından shell'den önce bir kez çalıştırılır).
-ip link set lo up 2>/dev/null
-# Ağ kartı varsa DHCP ile adres al (QEMU user-net: 10.0.2.x)
-if [ -e /sys/class/net/eth0 ]; then
-    ip link set eth0 up
-    udhcpc -q -t 3 -T 1 -n -i eth0 -s /etc/udhcpc.script >/dev/null 2>&1 \
-        && echo "[rc] Ağ: eth0 $(ip -4 -o addr show eth0 | awk '{print $4}')"
-fi
+# Ağ: bütün kablolu kartlar gerçek sürücüleriyle (e1000, e1000e, r8169, virtio-net, ...) açılır,
+# DHCP istemcisi arka planda çalışır ve kira süresini yeniler; saat ağdan eşitlenir.
+/sbin/ag baslat
+# İlk adresi kısa süre bekle (açılışı en fazla ~4 sn geciktirir)
+i=0
+while [ $i -lt 8 ]; do
+    a=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $2 " " $4; exit}')
+    [ -n "$a" ] && { echo "[rc] Ağ: $a"; break; }
+    sleep 0.5; i=$((i + 1))
+done
+[ -z "$a" ] && echo "[rc] Ağ: adres bekleniyor (arka planda DHCP sürüyor)"
+exit 0

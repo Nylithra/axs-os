@@ -12,10 +12,15 @@
  *     pre-remove          (isteğe bağlı) kaldırmadan önce çalışır
  *
  * Veritabanı: /var/lib/axpkg/db/<ad>/{MANIFEST,FILES,pre-remove}
- * Depo:       /var/lib/axpkg/repo içindeki .axp dosyaları (ada göre kurulum için)
+ * Yerel depo: /var/lib/axpkg/repo içindeki .axp dosyaları + INDEX
+ * Uzak depo:  /etc/axpkg/depolar dosyasındaki adresler (satır başına bir URL). "axpkg update"
+ *             her deponun INDEX'ini /var/lib/axpkg/remote/ altına indirir; yerelde olmayan
+ *             paket kurulurken .axp curl ile indirilir ve sha256 özeti doğrulanır.
  *
  * Komutlar:
- *   axpkg install <paket.axp | ad>...   kur (bağımlılıkları depodan çözer)
+ *   axpkg update                        uzak depo dizinlerini indir
+ *   axpkg upgrade                       kurulu paketlerin yeni sürümlerini kur
+ *   axpkg install <paket.axp | ad>...   kur (bağımlılıkları yerel/uzak depodan çözer)
  *   axpkg remove <ad>...                kaldır
  *   axpkg list                          kurulu paketler
  *   axpkg available                     depodaki paketler
@@ -25,6 +30,7 @@
  *   axpkg create <dizin> [çıktı.axp]    dizinden paket oluştur
  */
 #define _GNU_SOURCE
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -42,6 +48,9 @@
 static const char *root = "";                 /* AXPKG_ROOT: sahte kök (test için) */
 static char db_dir[PATH_MAX];
 static char repo_dir[PATH_MAX];
+static char remote_dir[PATH_MAX];   /* indirilen uzak INDEX'ler */
+static char cache_dir[PATH_MAX];    /* indirilen .axp'ler (kurulunca silinir) */
+static char repos_conf[PATH_MAX];
 
 #define C_OK   "\033[1;32m"
 #define C_ERR  "\033[1;31m"
@@ -242,12 +251,75 @@ static int find_owner(const char *path, const char *except, char *owner, size_t 
     return found;
 }
 
+/* Çakışma denetimi için tüm kurulu dosyaların sıralı dizini ("yol\tpaket") */
+typedef struct { char **v; size_t n; } OwnerIdx;
+
+static int cmp_path_prefix(const void *a, const void *b)
+{
+    const char *x = *(char *const *)a, *y = *(char *const *)b;
+    for (;; x++, y++) {
+        char cx = *x == '\t' ? 0 : *x, cy = *y == '\t' ? 0 : *y;
+        if (cx != cy)
+            return (unsigned char)cx - (unsigned char)cy;
+        if (!cx)
+            return 0;
+    }
+}
+
+static void owner_idx_load(OwnerIdx *ix, const char *except)
+{
+    ix->v = NULL;
+    ix->n = 0;
+    size_t cap = 0;
+    DIR *d = opendir(db_dir);
+    struct dirent *e;
+    while (d && (e = readdir(d))) {
+        if (e->d_name[0] == '.' || (except && !strcmp(e->d_name, except)))
+            continue;
+        char fp[PATH_MAX];
+        snprintf(fp, sizeof fp, "%s/%s/FILES", db_dir, e->d_name);
+        FILE *f = fopen(fp, "r");
+        char line[PATH_MAX];
+        while (f && fgets(line, sizeof line, f)) {
+            line[strcspn(line, "\n")] = 0;
+            if (ix->n == cap) {
+                cap = cap ? cap * 2 : 1024;
+                ix->v = realloc(ix->v, cap * sizeof(char *));
+            }
+            char *ent = malloc(strlen(line) + strlen(e->d_name) + 2);
+            sprintf(ent, "%s\t%s", line, e->d_name);
+            ix->v[ix->n++] = ent;
+        }
+        if (f)
+            fclose(f);
+    }
+    if (d)
+        closedir(d);
+    if (ix->n)
+        qsort(ix->v, ix->n, sizeof(char *), cmp_path_prefix);
+}
+
+static const char *owner_idx_find(OwnerIdx *ix, const char *path)
+{
+    const char *key = path;
+    char **hit = ix->n ? bsearch(&key, ix->v, ix->n, sizeof(char *), cmp_path_prefix) : NULL;
+    return hit ? strchr(*hit, '\t') + 1 : NULL;
+}
+
+static void owner_idx_free(OwnerIdx *ix)
+{
+    for (size_t i = 0; i < ix->n; i++)
+        free(ix->v[i]);
+    free(ix->v);
+}
+
 /* ------------------------------------------------------------------ */
 /* Kurulum                                                             */
 /* ------------------------------------------------------------------ */
 
 typedef struct {
     const char *pkg;
+    OwnerIdx *owners; /* çakışma denetimi */
     FILE *list;      /* kurulan dosyaların listesi */
     int conflicts;
     int check_only;
@@ -283,9 +355,10 @@ static int copy_tree(const char *src, const char *rel, CopyCtx *cx)
             continue;
         }
         if (cx->check_only) {
-            char owner[256];
-            if (find_owner(r, cx->pkg, owner, sizeof owner)) {
-                fprintf(stderr, C_ERR "  çakışma:" C_OFF " %s zaten '%s' paketine ait\n", r, owner);
+            const char *owner = owner_idx_find(cx->owners, r);
+            if (owner) {
+                if (cx->conflicts < 20)
+                    fprintf(stderr, C_ERR "  çakışma:" C_OFF " %s zaten '%s' paketine ait\n", r, owner);
                 cx->conflicts++;
             }
             continue;
@@ -302,7 +375,10 @@ static int copy_tree(const char *src, const char *rel, CopyCtx *cx)
                 break;
             }
         } else if (S_ISREG(st.st_mode)) {
-            if (copy_file(s, dst, st.st_mode) < 0) {
+            unlink(dst);
+            if (rename(s, dst) == 0) {
+                chmod(dst, st.st_mode & 07777);
+            } else if (copy_file(s, dst, st.st_mode) < 0) {
                 rc = fail("%s kopyalanamadı: %s", dst, strerror(errno));
                 break;
             }
@@ -338,10 +414,369 @@ static int run_hook(const char *script, const char *pkg)
     int st = run(argv);
     if (st != 0)
         fprintf(stderr, C_ERR "  uyarı:" C_OFF " betik %d koduyla çıktı\n", st);
-    return 0;
+    return st;
 }
 
 static int install_one(const char *arg, int force, int depth);
+static int remove_one(const char *name, int force);
+
+/* ------------------------------------------------------------------ */
+/* Depo dizinleri (INDEX): yerel + uzak                                */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    char name[128], version[64], description[512], depends[1024];
+    char file[256], sha256[80], provides[1024], url[512], icon[256];
+    char base[512];   /* uzak deponun adresi (yerelse boş) */
+    long size;
+    int local;
+} IndexEnt;
+
+/* Bir INDEX dosyasındaki kayıtları cb ile gezer; cb 1 dönerse durur. */
+static int index_walk(const char *path, const char *base, int local,
+                      int (*cb)(IndexEnt *, void *), void *ud)
+{
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return 0;
+    IndexEnt e;
+    memset(&e, 0, sizeof e);
+    char line[4096];
+    int stop = 0;
+    for (;;) {
+        char *r = fgets(line, sizeof line, f);
+        if (r)
+            line[strcspn(line, "\r\n")] = 0;
+        if (!r || !line[0]) {
+            if (e.name[0]) {
+                snprintf(e.base, sizeof e.base, "%s", base ? base : "");
+                e.local = local;
+                if (cb(&e, ud)) {
+                    stop = 1;
+                    break;
+                }
+            }
+            memset(&e, 0, sizeof e);
+            if (!r)
+                break;
+            continue;
+        }
+        char *eq = strchr(line, '=');
+        if (!eq)
+            continue;
+        *eq = 0;
+        const char *k = line, *v = eq + 1;
+#define S(key, fld) else if (!strcmp(k, key)) snprintf(e.fld, sizeof e.fld, "%s", v)
+        if (0) {}
+        S("name", name); S("version", version); S("description", description); S("depends", depends);
+        S("file", file); S("sha256", sha256); S("provides", provides); S("url", url);
+        S("icon", icon);
+        else if (!strcmp(k, "size")) e.size = atol(v);
+#undef S
+    }
+    fclose(f);
+    return stop;
+}
+
+/* Tüm dizinleri gez: önce yerel depo INDEX'i, sonra /var/lib/axpkg/remote/<n>.INDEX (+ <n>.URL) */
+static int index_all(int (*cb)(IndexEnt *, void *), void *ud)
+{
+    char p[PATH_MAX];
+    snprintf(p, sizeof p, "%s/INDEX", repo_dir);
+    if (index_walk(p, NULL, 1, cb, ud))
+        return 1;
+    for (int i = 0; i < 16; i++) {
+        char ip[PATH_MAX], up[PATH_MAX], base[512] = "";
+        snprintf(ip, sizeof ip, "%s/%d.INDEX", remote_dir, i);
+        snprintf(up, sizeof up, "%s/%d.URL", remote_dir, i);
+        if (access(ip, R_OK) != 0)
+            continue;
+        FILE *uf = fopen(up, "r");
+        if (uf) {
+            if (!fgets(base, sizeof base, uf))
+                base[0] = 0;
+            base[strcspn(base, "\r\n")] = 0;
+            fclose(uf);
+        }
+        if (index_walk(ip, base, 0, cb, ud))
+            return 1;
+    }
+    return 0;
+}
+
+/* Sürüm karşılaştırma: sayısal parçalara göre (1.10 > 1.9) */
+static int vercmp(const char *a, const char *b)
+{
+    while (*a || *b) {
+        if (isdigit((unsigned char)*a) && isdigit((unsigned char)*b)) {
+            long x = strtol(a, (char **)&a, 10), y = strtol(b, (char **)&b, 10);
+            if (x != y)
+                return x < y ? -1 : 1;
+        } else {
+            if (*a != *b)
+                return (unsigned char)*a - (unsigned char)*b;
+            a++, b++;
+        }
+    }
+    return 0;
+}
+
+typedef struct { const char *name; IndexEnt best; int found; } FindCtx;
+
+static int find_cb(IndexEnt *e, void *ud)
+{
+    FindCtx *c = ud;
+    if (strcmp(e->name, c->name))
+        return 0;
+    /* en yeni sürüm; eşitse yerel olan */
+    if (!c->found || vercmp(e->version, c->best.version) > 0 ||
+        (!vercmp(e->version, c->best.version) && e->local && !c->best.local)) {
+        c->best = *e;
+        c->found = 1;
+    }
+    return 0;
+}
+
+static int index_find(const char *name, IndexEnt *out)
+{
+    FindCtx c = { .name = name };
+    index_all(find_cb, &c);
+    if (c.found)
+        *out = c.best;
+    return c.found;
+}
+
+static int run_capture_line(char *const argv[], char *out, size_t n)
+{
+    int pfd[2];
+    if (pipe(pfd) < 0)
+        return -1;
+    pid_t pid = fork();
+    if (pid == 0) {
+        dup2(pfd[1], 1);
+        close(pfd[0]);
+        close(pfd[1]);
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    close(pfd[1]);
+    ssize_t k = read(pfd[0], out, n - 1);
+    out[k > 0 ? k : 0] = 0;
+    close(pfd[0]);
+    int st;
+    waitpid(pid, &st, 0);
+    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+/* Uzak paketi önbelleğe indir, sha256'yı doğrula. 0 = tamam */
+static int download_pkg(const IndexEnt *e, char *path, size_t n)
+{
+    char url[1024];
+    if (e->url[0])
+        snprintf(url, sizeof url, "%s", e->url);
+    else
+        snprintf(url, sizeof url, "%s/%s", e->base, e->file);
+    if (mkdir_p(cache_dir, 0755) < 0)
+        return fail("%s oluşturulamadı: %s", cache_dir, strerror(errno));
+    snprintf(path, n, "%s/%s", cache_dir, e->file[0] ? e->file : "paket.axp");
+    char part[PATH_MAX + 8];
+    snprintf(part, sizeof part, "%s.part", path);
+    char mb[32];
+    snprintf(mb, sizeof mb, "%.1f MB", e->size / 1048576.0);
+    info("İndiriliyor: %s %s (%s)", e->name, e->version, e->size ? mb : "boyut bilinmiyor");
+    printf(C_DIM "    %s" C_OFF "\n", url);
+    fflush(stdout);
+    char *argv[] = { "curl", "-fL", "--retry", "3", "--connect-timeout", "20",
+                     (isatty(1) || getenv("AXPKG_PROGRESS")) ? "--progress-bar" : "-sS", "-o", part, url, NULL };
+    if (run(argv) != 0) {
+        unlink(part);
+        return fail("%s indirilemedi. İnternet bağlantısını denetleyin: ag test", e->name);
+    }
+    if (e->sha256[0]) {
+        char out[256];
+        char *sa[] = { "sha256sum", part, NULL };
+        if (run_capture_line(sa, out, sizeof out) != 0 || strncmp(out, e->sha256, 64)) {
+            unlink(part);
+            return fail("%s: sha256 özeti tutmuyor (bozuk ya da değiştirilmiş indirme)", e->name);
+        }
+        printf(C_OK "  ✓" C_OFF " sha256 doğrulandı\n");
+    }
+    if (rename(part, path) < 0)
+        return fail("%s: %s", path, strerror(errno));
+    return 0;
+}
+
+typedef struct { const char *base; } IconCtx;
+
+static int icon_cb(IndexEnt *e, void *ud)
+{
+    IconCtx *c = ud;
+    if (!e->icon[0] || !is_valid_name(e->name))
+        return 0;
+    char dir[PATH_MAX], dst[PATH_MAX], url[1024];
+    snprintf(dir, sizeof dir, "%s/icons", remote_dir);
+    mkdir_p(dir, 0755);
+    snprintf(dst, sizeof dst, "%s/%s.png", dir, e->name);
+    snprintf(url, sizeof url, "%s/%s", c->base, e->icon);
+    char *argv[] = { "curl", "-fsSL", "--max-time", "20", "-o", dst, url, NULL };
+    if (run(argv) != 0)
+        unlink(dst);
+    return 0;
+}
+
+static int cmd_update(void)
+{
+    FILE *f = fopen(repos_conf, "r");
+    const char *env = getenv("AXPKG_REMOTE");
+    if (!f && !(env && *env))
+        return fail("uzak depo tanımlı değil (%s)", repos_conf);
+    if (mkdir_p(remote_dir, 0755) < 0)
+        return fail("%s oluşturulamadı: %s", remote_dir, strerror(errno));
+    /* eski dizinleri temizle */
+    for (int i = 0; i < 16; i++) {
+        char p[PATH_MAX];
+        snprintf(p, sizeof p, "%s/%d.INDEX", remote_dir, i);
+        unlink(p);
+        snprintf(p, sizeof p, "%s/%d.URL", remote_dir, i);
+        unlink(p);
+    }
+    char line[512];
+    int idx = 0, ok = 0;
+    char envbuf[2048];
+    snprintf(envbuf, sizeof envbuf, "%s", env ? env : "");
+    char *envp = envbuf[0] ? envbuf : NULL;
+    for (;;) {
+        if (envp) { /* AXPKG_REMOTE: boşlukla ayrılmış adresler (test için) */
+            char *t = strtok(envp == envbuf ? envbuf : NULL, " ");
+            envp = (char *)1;
+            if (!t)
+                break;
+            snprintf(line, sizeof line, "%s", t);
+        } else if (!fgets(line, sizeof line, f)) {
+            break;
+        }
+        line[strcspn(line, "\r\n")] = 0;
+        char *u = line;
+        while (*u == ' ')
+            u++;
+        if (!*u || *u == '#' || idx >= 16)
+            continue;
+        size_t l = strlen(u);
+        while (l && u[l - 1] == '/')
+            u[--l] = 0;
+        char ip[PATH_MAX], url[640];
+        snprintf(ip, sizeof ip, "%s/%d.INDEX", remote_dir, idx);
+        snprintf(url, sizeof url, "%s/INDEX", u);
+        info("Depo: %s", u);
+        char *argv[] = { "curl", "-fsSL", "--retry", "2", "--connect-timeout", "15", "-o", ip, url, NULL };
+        if (run(argv) != 0) {
+            fprintf(stderr, C_ERR "  erişilemedi" C_OFF " (internet bağlantısı? ag test)\n");
+            unlink(ip);
+            continue;
+        }
+        char up[PATH_MAX];
+        snprintf(up, sizeof up, "%s/%d.URL", remote_dir, idx);
+        FILE *uf = fopen(up, "w");
+        if (uf) {
+            fprintf(uf, "%s\n", u);
+            fclose(uf);
+        }
+        int cnt = 0;
+        FILE *ixf = fopen(ip, "r");
+        char l2[4096];
+        while (ixf && fgets(l2, sizeof l2, ixf))
+            cnt += !strncmp(l2, "name=", 5);
+        if (ixf)
+            fclose(ixf);
+        printf(C_OK "  ✓" C_OFF " %d paket\n", cnt);
+        /* Market için simgeler: <uzak>/icon=... -> remote/icons/<ad>.png */
+        IconCtx icx = { .base = u };
+        index_walk(ip, u, 0, icon_cb, &icx);
+        idx++;
+        ok++;
+    }
+    if (f)
+        fclose(f);
+    return ok ? 0 : fail("hiçbir depoya erişilemedi");
+}
+
+typedef struct { char **names; size_t n; } NameList;
+
+static int names_cb(IndexEnt *e, void *ud)
+{
+    NameList *l = ud;
+    for (size_t i = 0; i < l->n; i++)
+        if (!strcmp(l->names[i], e->name))
+            return 0;
+    l->names = realloc(l->names, sizeof(char *) * (l->n + 1));
+    l->names[l->n++] = strdup(e->name);
+    return 0;
+}
+
+static int cmd_names(void)
+{
+    NameList l = { 0 };
+    index_all(names_cb, &l);
+    qsort(l.names, l.n, sizeof(char *), cmp_str);
+    for (size_t i = 0; i < l.n; i++) {
+        puts(l.names[i]);
+        free(l.names[i]);
+    }
+    free(l.names);
+    return 0;
+}
+
+typedef struct { const char *cmd; char pkg[128]; } ProvCtx;
+
+static int prov_cb(IndexEnt *e, void *ud)
+{
+    ProvCtx *c = ud;
+    char buf[1024];
+    snprintf(buf, sizeof buf, "%s", e->provides);
+    for (char *t = strtok(buf, " ,"); t; t = strtok(NULL, " ,"))
+        if (!strcmp(t, c->cmd)) {
+            snprintf(c->pkg, sizeof c->pkg, "%s", e->name);
+            return 1;
+        }
+    return 0;
+}
+
+static int cmd_provides(const char *cmd)
+{
+    ProvCtx c = { .cmd = cmd };
+    index_all(prov_cb, &c);
+    if (!c.pkg[0])
+        return 1;
+    puts(c.pkg);
+    return 0;
+}
+
+static int cmd_upgrade(void)
+{
+    DIR *d = opendir(db_dir);
+    struct dirent *e;
+    int n = 0, rc = 0;
+    while (d && (e = readdir(d))) {
+        if (e->d_name[0] == '.')
+            continue;
+        char mp[PATH_MAX];
+        snprintf(mp, sizeof mp, "%s/%s/MANIFEST", db_dir, e->d_name);
+        Manifest m;
+        IndexEnt ie;
+        if (manifest_read(mp, &m) != 0 || !index_find(m.name, &ie))
+            continue;
+        if (vercmp(ie.version, m.version) > 0) {
+            info("%s: %s -> %s", m.name, m.version, ie.version);
+            rc |= install_one(m.name, 1, 0);
+            n++;
+        }
+    }
+    if (d)
+        closedir(d);
+    if (!n)
+        info("Tüm paketler güncel");
+    return rc;
+}
 
 /* Depoda ada göre paket dosyası bul (en son sürüm = alfabetik son). */
 static int repo_find(const char *name, char *out, size_t n)
@@ -377,7 +812,12 @@ static int repo_find(const char *name, char *out, size_t n)
 
 static int install_file(const char *file, int force, int depth)
 {
-    char tmpl[] = "/tmp/axpkg.XXXXXX";
+    /* Çalışma dizini hedefle aynı dosya sisteminde: dosyalar kopyalanmadan taşınır (rename).
+     * Canlı sistemde her şey RAM'de olduğundan büyük paketlerde bellek iki kat harcanmaz. */
+    if (mkdir_p(cache_dir, 0755) < 0)
+        return fail("%s oluşturulamadı: %s", cache_dir, strerror(errno));
+    char tmpl[PATH_MAX];
+    snprintf(tmpl, sizeof tmpl, "%s/is.XXXXXX", cache_dir);
     char *work = mkdtemp(tmpl);
     if (!work)
         return fail("geçici dizin oluşturulamadı: %s", strerror(errno));
@@ -441,8 +881,11 @@ static int install_file(const char *file, int force, int depth)
 
     /* Çakışma denetimi */
     if (has_files && !force) {
-        CopyCtx chk = { .pkg = m.name, .check_only = 1 };
+        OwnerIdx ow;
+        owner_idx_load(&ow, m.name);
+        CopyCtx chk = { .pkg = m.name, .check_only = 1, .owners = &ow };
         copy_tree(files, "", &chk);
+        owner_idx_free(&ow);
         if (chk.conflicts) {
             fail("%d dosya çakışması; zorlamak için: axpkg install -f", chk.conflicts);
             goto out;
@@ -513,7 +956,15 @@ static int install_file(const char *file, int force, int depth)
         copy_file(src, dst, 0755);
 
     snprintf(src, sizeof src, "%s/post-install", work);
-    run_hook(src, m.name);
+    if (run_hook(src, m.name) != 0) {
+        /* Kurulum betiği başarısız (ör. tarayıcı indirilemedi): yarım kurulum bırakma */
+        if (!upgrade) {
+            fprintf(stderr, C_ERR "  geri alınıyor:" C_OFF " %s kurulumu tamamlanamadı\n", m.name);
+            remove_one(m.name, 1);
+        }
+        fail("%s kurulamadı (kurulum betiği başarısız)", m.name);
+        goto out;
+    }
     printf(C_OK "  ✓" C_OFF " %s %s kuruldu (%d dosya)\n", m.name, m.version, cx.count);
     rc = 0;
 out:
@@ -533,9 +984,17 @@ static int install_one(const char *arg, int force, int depth)
     if (is_installed(arg) && !force && depth > 0)
         return 0;
     char path[PATH_MAX];
-    if (!repo_find(arg, path, sizeof path))
-        return fail("'%s' paketi depoda yok (%s). Mevcutlar: axpkg available", arg, repo_dir);
-    return install_file(path, force, depth);
+    IndexEnt ie;
+    int have_ix = index_find(arg, &ie);
+    if ((!have_ix || ie.local) && repo_find(arg, path, sizeof path))
+        return install_file(path, force, depth);
+    if (!have_ix)
+        return fail("'%s' paketi bulunamadı. Depo dizinini yenilemek için: axpkg update", arg);
+    if (download_pkg(&ie, path, sizeof path) != 0)
+        return 1;
+    int rc = install_file(path, force, depth);
+    unlink(path); /* bellekte yer kaplamasın (canlı sistemde her şey RAM'de) */
+    return rc;
 }
 
 /* ------------------------------------------------------------------ */
@@ -675,54 +1134,41 @@ static int cmd_list(void)
     return 0;
 }
 
-static int cmd_available(void)
+typedef struct { const char *q; int n; NameList seen; } AvailCtx;
+
+static int avail_cb(IndexEnt *e, void *ud)
 {
-    DIR *d = opendir(repo_dir);
-    if (!d) {
-        printf("Depo yok: %s\n", repo_dir);
+    AvailCtx *c = ud;
+    for (size_t i = 0; i < c->seen.n; i++)
+        if (!strcmp(c->seen.names[i], e->name))
+            return 0;
+    if (c->q && !strcasestr(e->name, c->q) && !strcasestr(e->description, c->q))
         return 0;
-    }
-    char **files = NULL;
-    size_t n = 0;
-    struct dirent *e;
-    while ((e = readdir(d))) {
-        size_t l = strlen(e->d_name);
-        if (l > 4 && !strcmp(e->d_name + l - 4, ".axp")) {
-            files = realloc(files, sizeof(char *) * (n + 1));
-            files[n++] = strdup(e->d_name);
-        }
-    }
-    closedir(d);
-    qsort(files, n, sizeof(char *), cmp_str);
-    printf("\033[1m%-3s %-20s %-12s %s\033[0m\n", "", "PAKET", "SÜRÜM", "AÇIKLAMA");
-    for (size_t i = 0; i < n; i++) {
-        char path[PATH_MAX];
-        snprintf(path, sizeof path, "%s/%s", repo_dir, files[i]);
-        /* Yalnızca MANIFEST'i çıkararak oku */
-        char cmd[PATH_MAX * 2];
-        snprintf(cmd, sizeof cmd, "tar -xzOf '%s' MANIFEST 2>/dev/null || tar -xzOf '%s' ./MANIFEST", path, path);
-        FILE *p = popen(cmd, "r");
-        Manifest m = { 0 };
-        if (p) {
-            char line[2048];
-            while (fgets(line, sizeof line, p)) {
-                line[strcspn(line, "\n")] = 0;
-                char *eq = strchr(line, '=');
-                if (!eq)
-                    continue;
-                *eq = 0;
-                if (!strcmp(line, "name"))             snprintf(m.name, sizeof m.name, "%s", eq + 1);
-                else if (!strcmp(line, "version"))     snprintf(m.version, sizeof m.version, "%s", eq + 1);
-                else if (!strcmp(line, "description")) snprintf(m.description, sizeof m.description, "%s", eq + 1);
-            }
-            pclose(p);
-        }
-        if (m.name[0])
-            printf("%s %-20s %-10s %s\n", is_installed(m.name) ? C_OK "[k]" C_OFF : "   ", m.name, m.version, m.description);
-        free(files[i]);
-    }
-    free(files);
-    printf(C_DIM "[k] = kurulu.  Kurmak için: axpkg install <ad>" C_OFF "\n");
+    names_cb(e, &c->seen);
+    char sz[32] = "";
+    if (!e->local && e->size)
+        snprintf(sz, sizeof sz, " (%.1f MB)", e->size / 1048576.0);
+    printf("%s %-20s %-10s %s%s%s%s\n", is_installed(e->name) ? C_OK "[k]" C_OFF : e->local ? "   " : C_INFO "[i]" C_OFF,
+           e->name, e->version, e->description, C_DIM, sz, C_OFF);
+    c->n++;
+    return 0;
+}
+
+static int cmd_available(const char *q)
+{
+    printf("\033[1m%-3s %-20s %-10s %s\033[0m\n", "", "PAKET", "SÜRÜM", "AÇIKLAMA");
+    AvailCtx c = { .q = q };
+    index_all(avail_cb, &c);
+    for (size_t i = 0; i < c.seen.n; i++)
+        free(c.seen.names[i]);
+    free(c.seen.names);
+    if (!c.n)
+        puts(q ? "Eşleşen paket yok." : "Depoda paket yok.");
+    printf(C_DIM "[k] = kurulu, [i] = internetten indirilir.  Kurmak için: axpkg install <ad>" C_OFF "\n");
+    char p[PATH_MAX];
+    snprintf(p, sizeof p, "%s/0.INDEX", remote_dir);
+    if (access(p, F_OK) != 0)
+        printf(C_DIM "Uzak depo dizini yok; internetteki paketleri görmek için: axpkg update" C_OFF "\n");
     return 0;
 }
 
@@ -822,17 +1268,20 @@ static void usage(void)
 {
     printf("\033[1maxpkg %s\033[0m - AxsOS paket yöneticisi\n\n"
            "Kullanım:\n"
+           "  axpkg update                             uzak depo dizinlerini internetten indir\n"
+           "  axpkg upgrade                            kurulu paketleri güncelle\n"
            "  axpkg install [-f] <paket.axp | ad>...   paket kur (-f: zorla/yeniden kur)\n"
            "  axpkg remove  [-f] <ad>...               paket kaldır\n"
            "  axpkg list                               kurulu paketler\n"
-           "  axpkg available                          depodaki paketler\n"
+           "  axpkg available | search [kelime]        depodaki paketler (yerel + uzak)\n"
+           "  axpkg provides <komut>                   komutu sağlayan paket\n"
            "  axpkg info <ad>                          paket bilgisi\n"
            "  axpkg files <ad>                         paketin dosyaları\n"
            "  axpkg owner <yol>                        dosyanın sahibi olan paket\n"
            "  axpkg create <dizin> [çıktı.axp]         dizinden paket oluştur\n\n"
            "Paket (.axp = tar.gz): MANIFEST (name=, version=, description=, depends=)\n"
            "                       files/ (kök dizine kopyalanır), post-install, pre-remove\n"
-           "Depo: %s\n", VERSION, repo_dir);
+           "Yerel depo: %s   Uzak depolar: %s\n", VERSION, repo_dir, repos_conf);
 }
 
 int main(int argc, char **argv)
@@ -846,6 +1295,9 @@ int main(int argc, char **argv)
         snprintf(repo_dir, sizeof repo_dir, "%s", rd);
     else
         snprintf(repo_dir, sizeof repo_dir, "%s/var/lib/axpkg/repo", root);
+    snprintf(remote_dir, sizeof remote_dir, "%s/var/lib/axpkg/remote", root);
+    snprintf(cache_dir, sizeof cache_dir, "%s/var/cache/axpkg", root);
+    snprintf(repos_conf, sizeof repos_conf, "%s/etc/axpkg/depolar", root);
 
     if (argc < 2 || !strcmp(argv[1], "help") || !strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) {
         usage();
@@ -866,7 +1318,18 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "list") || !strcmp(cmd, "ls"))
         return cmd_list();
     if (!strcmp(cmd, "available") || !strcmp(cmd, "search"))
-        return cmd_available();
+        return cmd_available(argc > 2 ? argv[2] : NULL);
+    if (!strcmp(cmd, "update"))
+        return cmd_update();
+    if (!strcmp(cmd, "upgrade")) {
+        if (mkdir_p(db_dir, 0755) < 0)
+            return fail("%s oluşturulamadı: %s", db_dir, strerror(errno));
+        return cmd_upgrade();
+    }
+    if (!strcmp(cmd, "names"))
+        return cmd_names();
+    if (!strcmp(cmd, "provides"))
+        return argc > 2 ? cmd_provides(argv[2]) : 1;
     if (!strcmp(cmd, "create")) {
         if (argc < 3)
             return fail("kullanım: axpkg create <dizin> [çıktı.axp]");

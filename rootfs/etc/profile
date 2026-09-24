@@ -1,2 +1,16 @@
-export PS1='\[\e[1;32m\]\u@\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
-alias ll='ls -l'
+# /etc/profile - oturum kabukları (bash -l, sh -l) için ortak ortam
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export HOME="${HOME:-/root}"
+export LANG=C.UTF-8
+export EDITOR=nano VISUAL=nano PAGER=less
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+[ -n "$TERM" ] && [ "$TERM" != dumb ] || export TERM=linux
+umask 022
+# bash için etkileşimli ayarlar
+if [ -n "$BASH_VERSION" ] && [ -f /etc/bash.bashrc ]; then
+    . /etc/bash.bashrc
+    [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"
+else
+    export PS1='\[\e[1;32m\]\u@\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
+    alias ll='ls -l'
+fi

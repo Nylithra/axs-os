@@ -8,7 +8,7 @@
 #   TIMEOUT=30 ./run.sh      30 sn sonra QEMU'yu kapat (otomatik test için)
 #   VERBOSE=1 ./run.sh       kernel mesajlarını göster
 #   APPEND="..." ./run.sh    kernel komut satırına ekle
-#   MEM=1G ./run.sh          bellek miktarı (varsayılan 512M, masaüstünde 768M)
+#   MEM=4G ./run.sh          bellek miktarı (varsayılan 512M, masaüstünde 2G; tarayıcı için 3-4G)
 #   PORT=6080 ./run.sh gui   tarayıcı kipinde HTTP portu
 # QEMU'dan çıkış: Ctrl-a ardından x   (ya da sistemde: poweroff)
 set -euo pipefail
@@ -21,7 +21,7 @@ MODE="${1:-kernel}"
 GUI=0
 case "$MODE" in gui|iso-gui) GUI=1 ;; esac
 
-ARGS=(-m "${MEM:-$([ $GUI = 1 ] && echo 768M || echo 512M)}" -no-reboot -nic user,model=e1000)
+ARGS=(-m "${MEM:-$([ $GUI = 1 ] && echo 2G || echo 512M)}" -no-reboot -nic user,model=e1000)
 if [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
     ARGS+=(-enable-kvm -cpu host)
 else

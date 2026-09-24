@@ -7,6 +7,7 @@
 #include <linux/input.h>
 #include <arpa/inet.h>
 #include <math.h>
+#include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -741,16 +742,15 @@ static void update_clock(void)
 
 static void update_net(void)
 {
-    /* eth0'ın IPv4 adresini doğrudan çekirdekten sor (alt süreç yok -> donma yok) */
+    /* İlk etkin ağ arayüzünün IPv4 adresi (getifaddrs: netlink, alt süreç yok -> donma yok) */
     char buf[64] = "";
-    int sk = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
-    if (sk >= 0) {
-        struct ifreq ifr;
-        memset(&ifr, 0, sizeof ifr);
-        snprintf(ifr.ifr_name, sizeof ifr.ifr_name, "eth0");
-        if (ioctl(sk, SIOCGIFADDR, &ifr) == 0)
-            inet_ntop(AF_INET, &((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr, buf, sizeof buf);
-        close(sk);
+    struct ifaddrs *ifs = NULL;
+    if (getifaddrs(&ifs) == 0) {
+        for (struct ifaddrs *a = ifs; a && !buf[0]; a = a->ifa_next)
+            if (a->ifa_addr && a->ifa_addr->sa_family == AF_INET && !(a->ifa_flags & IFF_LOOPBACK) &&
+                (a->ifa_flags & IFF_UP))
+                inet_ntop(AF_INET, &((struct sockaddr_in *)a->ifa_addr)->sin_addr, buf, sizeof buf);
+        freeifaddrs(ifs);
     }
     if (strcmp(buf, net_text)) {
         snprintf(net_text, sizeof net_text, "%s", buf);

@@ -1,0 +1,9 @@
+name=google-chrome
+title=Google Chrome
+version=1.0
+category=İnternet
+depends=tarayici-ortami
+extra_size=115000000
+app=google-chrome
+description=Google Chrome web tarayıcısı (kurulurken google.com'dan kararlı sürüm indirilir)
+about=Google'ın web tarayıcısı. Kurulum sırasında Chrome'un en son kararlı sürümü doğrudan dl.google.com'dan indirilir (~110 MB, açılınca ~350 MB); Google Chrome, Google'ın hizmet koşullarına tabidir. /opt/tarayici içinde ayrı bir kullanıcıyla ve kendi korumalı alanıyla (sandbox) çalışır. Sanal makineye en az 3 GB bellek ver.

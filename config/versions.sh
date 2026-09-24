@@ -12,3 +12,13 @@ STB_REF=2c980bb59875b0d32144a71867fbdebb2f77cd20   # nothings/stb (stb_truetype)
 INTER_VERSION=v4.1           # rsms/inter (arayüz yazı tipi, OFL)
 JBMONO_VERSION=v2.304        # JetBrains/JetBrainsMono (terminal/editör yazı tipi, OFL)
 NOVNC_VERSION=v1.6.0          # tarayıcıdan masaüstü (./run.sh gui, ekran yoksa)
+# Kabuk ve araçlar (shell aşaması)
+BASH_VER=5.2.37              # GNU bash (varsayılan kabuk)
+NCURSES_VER=6.5              # nano ve bash için terminfo
+NANO_VER=8.4                 # metin düzenleyici
+CURL_VER=8.18.0              # HTTPS istemcisi (axpkg uzak depo, tarayıcı indirme)
+# Uzak paket deposu: CI "paketler" sürümüne INDEX + .axp dosyalarını yükler (axpkg update)
+REMOTE_REPO=https://github.com/Nylithra/axs-os/releases/download/paketler
+# Tarayıcı çalışma ortamı (uzak depo paketi; ./build.sh tarayici, root ister)
+TARAYICI_UBUNTU=noble        # Ubuntu 24.04 LTS kütüphaneleri (glibc, GTK, X)
+TARAYICI_ORTAM_VER=1.0       # tarayici-ortami paket sürümü

@@ -1,0 +1,20 @@
+#!/bin/sh
+# Google Chrome'un resmi .deb paketini Google'dan indirip /opt/tarayici içine açar.
+R=/opt/tarayici
+URL="https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+D="$R/opt/.chrome-indir"
+rm -rf "$D" && mkdir -p "$D"
+echo "Google Chrome indiriliyor (dl.google.com)..."
+if ! curl -fL --retry 3 --connect-timeout 20 ${AXPKG_PROGRESS:+--progress-bar} -o "$D/chrome.deb" "$URL"; then
+    echo "HATA: Chrome indirilemedi. İnternet bağlantısını denetleyin: ag test" >&2
+    rm -rf "$D"; exit 1
+fi
+echo "Paket açılıyor..."
+rm -rf "$R/opt/google/chrome"
+if ! chroot "$R" dpkg-deb -x /opt/.chrome-indir/chrome.deb /; then
+    echo "HATA: paket açılamadı" >&2; rm -rf "$D"; exit 1
+fi
+rm -rf "$D" "$R/etc/cron.daily/google-chrome"
+# korumalı alan yardımcısı (setuid gerekmez; kullanıcı ad alanları kullanılır)
+V=$(chroot "$R" /opt/google/chrome/chrome --version 2>/dev/null)
+echo "${V:-Google Chrome} kuruldu. Başlatmak için: google-chrome (ya da Market'te Aç)"

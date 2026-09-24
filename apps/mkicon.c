@@ -54,6 +54,25 @@ static void tri(Surf *s, float x0, float y0, float x1, float y1, float x2, float
         }
 }
 
+/* Dünya küresi (tarayıcı simgeleri; marka logosu değil) */
+static void globe(Surf *s, float cx, float cy, float r, float w, uint32_t c)
+{
+    stroke_circle(s, cx, cy, r, w, c);
+    draw_line(s, cx - r, cy, cx + r, cy, w, c);
+    draw_line(s, cx, cy - r, cx, cy + r, w, c);
+    for (int k = -1; k <= 1; k += 2) { /* enlemler */
+        float y = cy + k * r * .5f, hw = r * .866f;
+        draw_line(s, cx - hw, y, cx + hw, y, w * .8f, c);
+    }
+    float px = cx, py = cy - r; /* boylam elipsi */
+    for (int i = 1; i <= 48; i++) {
+        float a = i * 6.2831853f / 48;
+        float nx = cx + r * .45f * sinf(a), ny = cy - r * cosf(a);
+        draw_line(s, px, py, nx, ny, w * .8f, c);
+        px = nx, py = ny;
+    }
+}
+
 static int draw_app_icon(Surf *s, const char *id, int sz)
 {
     float f = (float)sz;
@@ -164,6 +183,23 @@ static int draw_app_icon(Surf *s, const char *id, int sz)
         squircle(s, sz, HEX(0xA78BFA), HEX(0x6D28D9));
         fill_circle(s, f * .5f, f * .5f, f * .30f, ALPHA(W, 60));
         draw_text_center(s, F_UI_BOLD, P(.46), (Rect){ 0, P(.24), sz, P(.52) }, W, "?");
+    } else if (!strcmp(id, "firefox")) {
+        squircle(s, sz, HEX(0xFB923C), HEX(0x7C3AED));
+        fill_circle(s, f * .5f, f * .52f, f * .31f, ALPHA(W, 40));
+        globe(s, f * .5f, f * .52f, f * .29f, f * .035f, W);
+        fill_circle(s, f * .72f, f * .30f, f * .09f, HEX(0xFDE68A));
+    } else if (!strcmp(id, "google-chrome")) {
+        squircle(s, sz, HEX(0x60A5FA), HEX(0x1E3A8A));
+        fill_circle(s, f * .5f, f * .52f, f * .31f, ALPHA(W, 40));
+        globe(s, f * .5f, f * .52f, f * .29f, f * .035f, W);
+        fill_circle(s, f * .5f, f * .52f, f * .08f, HEX(0x93C5FD));
+    } else if (!strcmp(id, "tarayici-ortami")) {
+        squircle(s, sz, HEX(0x94A3B8), HEX(0x334155));
+        for (int i = 2; i >= 0; i--) {
+            Rect r = { P(.22 + i * .06), P(.24 + i * .08), P(.46), P(.34) };
+            fill_rrect(s, r, P(.05), i ? ALPHA(W, 90 + (2 - i) * 60) : W);
+        }
+        fill_rect(s, (Rect){ P(.22), P(.30), P(.46), P(.03) }, HEX(0x334155));
     } else if (!strcmp(id, "axs-ornekler")) {
         squircle(s, sz, HEX(0xC084FC), HEX(0x5B21B6));
         draw_logo(s, f * .5f, f * .52f, f * .56f, W, HEX(0xE9D5FF));

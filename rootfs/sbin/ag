@@ -1,0 +1,59 @@
+#!/bin/sh
+# ag - AxsOS ağ yöneticisi (gerçek ağ kartları: kablolu Ethernet)
+#   ag baslat          tüm kartları aç, DHCP istemcisini arka planda çalıştır, saati eşitle
+#   ag durum           kartlar, adresler, ağ geçidi, DNS
+#   ag yenile [kart]   DHCP'yi yeniden başlat
+#   ag test            internet bağlantısını dene (DNS + HTTPS)
+#   ag sabit <kart> <ip/önek> <ağ-geçidi> [dns]   elle adres ver
+set -u
+cmd="${1:-durum}"
+cards() { for d in /sys/class/net/*; do n=${d##*/}; [ "$n" = lo ] && continue; [ -e "$d/device" ] || [ -e "$d/phy80211" ] || continue; echo "$n"; done; }
+
+dhcp_start() {
+    ip link set "$1" up 2>/dev/null
+    [ -f "/run/udhcpc.$1.pid" ] && kill "$(cat "/run/udhcpc.$1.pid")" 2>/dev/null
+    # -b: adres alınamazsa arka plana geç ve denemeyi sürdür; kira süresi dolunca yeniler
+    udhcpc -b -S -i "$1" -s /etc/udhcpc.script -p "/run/udhcpc.$1.pid" \
+        -t 4 -T 2 -A 5 -x "hostname:$(hostname)" >/dev/null 2>&1
+}
+
+case "$cmd" in
+baslat)
+    ip link set lo up 2>/dev/null
+    [ -s /etc/resolv.conf ] || echo "nameserver 1.1.1.1" > /etc/resolv.conf
+    for c in $(cards); do dhcp_start "$c"; done
+    # saat: ağdan eşitle (HTTPS sertifikaları doğru saat ister); arka planda, açılışı bekletmez
+    ( sleep 2; ntpd -n -q -p pool.ntp.org -p time.google.com >/dev/null 2>&1 ) &
+    ;;
+yenile)
+    if [ -n "${2:-}" ]; then dhcp_start "$2"; else for c in $(cards); do dhcp_start "$c"; done; fi
+    sleep 3; exec "$0" durum ;;
+sabit)
+    [ $# -ge 4 ] || { echo "kullanım: ag sabit <kart> <ip/önek> <ağ-geçidi> [dns]"; exit 1; }
+    [ -f "/run/udhcpc.$2.pid" ] && kill "$(cat "/run/udhcpc.$2.pid")" 2>/dev/null
+    ip link set "$2" up && ip -4 addr flush dev "$2" && ip addr add "$3" dev "$2" \
+        && ip route replace default via "$4" dev "$2" \
+        && echo "nameserver ${5:-1.1.1.1}" > /etc/resolv.conf && echo "Tamam: $2 $3" ;;
+test)
+    printf 'DNS (example.com): '
+    if nslookup example.com >/dev/null 2>&1; then echo tamam; else echo "BAŞARISIZ"; fi
+    printf 'HTTPS (https://example.com): '
+    code=$(curl -s -o /dev/null -m 15 -w '%{http_code}' https://example.com 2>/dev/null)
+    [ "$code" = 200 ] && echo "tamam (HTTP $code)" || echo "BAŞARISIZ (${code:-yanıt yok})"
+    ;;
+durum|*)
+    for c in $(cards); do
+        drv=$(basename "$(readlink -f /sys/class/net/$c/device/driver 2>/dev/null)" 2>/dev/null)
+        st=$(cat /sys/class/net/$c/operstate 2>/dev/null)
+        car=$(cat /sys/class/net/$c/carrier 2>/dev/null)
+        mac=$(cat /sys/class/net/$c/address 2>/dev/null)
+        addr=$(ip -4 -o addr show "$c" 2>/dev/null | awk '{print $4}')
+        printf '%s  sürücü=%s  durum=%s  kablo=%s  mac=%s  ipv4=%s\n' "$c" "${drv:-?}" "${st:-?}" \
+            "$([ "$car" = 1 ] && echo takılı || echo yok)" "$mac" "${addr:--}"
+    done
+    [ -z "$(cards)" ] && echo "Ağ kartı bulunamadı."
+    gw=$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}')
+    echo "ağ geçidi: ${gw:--}"
+    echo "dns: $(awk '/^nameserver/ {printf "%s ", $2}' /etc/resolv.conf 2>/dev/null)"
+    ;;
+esac

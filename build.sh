@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-STAGES=(kernel busybox init axsh python axs axsde apps axpkg initramfs iso)
+STAGES=(kernel busybox init axsh python axs shell axsde apps axpkg initramfs iso)
 
 run_stage() { bash "scripts/build-$1.sh"; }
 

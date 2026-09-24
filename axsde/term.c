@@ -159,7 +159,7 @@ int term_spawn(Term *t, char *const argv[], const char *cwd)
         sigprocmask(SIG_SETMASK, &none, NULL);
         for (int sig = 1; sig < 32; sig++)
             signal(sig, SIG_DFL);
-        setenv("TERM", "xterm", 1);
+        setenv("TERM", "xterm-256color", 1);
         setenv("COLORTERM", "truecolor", 1);
         unsetenv("NO_COLOR");
         if (cwd && chdir(cwd) < 0) { /* yok say */ }

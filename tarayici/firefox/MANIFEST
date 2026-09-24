@@ -1,0 +1,9 @@
+name=firefox
+title=Firefox
+version=1.0
+category=İnternet
+depends=tarayici-ortami
+extra_size=85000000
+app=firefox
+description=Mozilla Firefox web tarayıcısı (kurulurken mozilla.org'dan Türkçe sürüm indirilir)
+about=Mozilla'nın açık kaynak web tarayıcısı. Kurulum sırasında Firefox'un en son Türkçe sürümü doğrudan download.mozilla.org'dan indirilir (~80 MB, açılınca ~250 MB) ve /opt/tarayici içinde çalışır. İndirdiğin dosyalar ~/İndirilenler klasörüne kaydedilir. Tarayıcılar bellekte çalıştığı için sanal makineye en az 3 GB bellek ver.

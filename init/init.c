@@ -6,7 +6,7 @@
  * - AxsOS açılış logosunu basar
  * - /etc/rc varsa çalıştırır (ağ vb. açılış işleri)
  * - her etkin konsolda (ör. ekran tty1 + seri ttyS0) logo basıp shell başlatır
- *   (/bin/axsh, yoksa /bin/sh); shell kapanınca yeniden açar
+ *   (/bin/bash, yoksa /bin/axsh, yoksa /bin/sh); shell kapanınca yeniden açar
  * - ekran konsolunda (tty1) framebuffer varsa AxsDE masaüstünü başlatır
  *   (çekirdek parametresi axs.gui=0 ile kapatılır; masaüstünden "metin
  *   konsoluna geç" denirse ya da art arda çökerse o konsolda shell açılır)
@@ -34,7 +34,7 @@
 #define HOSTNAME "axsos"
 #define CONSOLE  "/dev/console"
 
-static const char *SHELLS[] = { "/bin/axsh", "/bin/sh", NULL };
+static const char *SHELLS[] = { "/bin/bash", "/bin/axsh", "/bin/sh", NULL };
 
 #define MAX_TTYS 4
 #define DESKTOP  "/usr/bin/axsde"
@@ -73,10 +73,15 @@ static void do_mount(const char *src, const char *dst, const char *type,
 
 static void mount_all(void)
 {
+    /* Kök dosya sistemi (initramfs, tmpfs) varsayılan olarak belleğin yarısıyla sınırlı;
+     * büyük paketler (tarayıcılar) için sınırı yükselt. */
+    mount("rootfs", "/", NULL, MS_REMOUNT, "size=90%");
     do_mount("proc", "/proc", "proc", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL);
     do_mount("sysfs", "/sys", "sysfs", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL);
     do_mount("devtmpfs", "/dev", "devtmpfs", MS_NOSUID, "mode=0755");
     do_mount("devpts", "/dev/pts", "devpts", MS_NOSUID | MS_NOEXEC, "gid=5,mode=620,ptmxmode=666");
+    /* POSIX paylaşımlı bellek (glibc shm_open; Firefox/Chrome buna ihtiyaç duyar) */
+    do_mount("tmpfs", "/dev/shm", "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777");
     do_mount("tmpfs", "/tmp", "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777");
     do_mount("tmpfs", "/run", "tmpfs", MS_NOSUID | MS_NODEV, "mode=0755");
 }

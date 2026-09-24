@@ -66,6 +66,11 @@ for d in "$ROOT"/apps/*/; do
     n=$((n + 1))
 done
 
+# xkopru: X uygulamalarını AxsDE penceresinde gösteren köprü (tarayici-ortami paketine girer)
+"$CC" -static "${CFLAGS[@]}" -o "$W/xkopru" "$ROOT/apps/xkopru/main.c" ${LIBOBJ[@]/$IMG_OBJ} -lm \
+    || die "derlenemedi: xkopru"
+strip "$W/xkopru"
+
 # Resim Görüntüleyici örnek resimlerle gelir
 if [ -d "$PK/resim-gorucu" ]; then
     S="$PK/resim-gorucu/files/usr/share/axsde/ornek-resimler"
@@ -74,7 +79,7 @@ if [ -d "$PK/resim-gorucu" ]; then
 fi
 
 # 4) pkgs/ altındaki (terminal) paketlerin simgeleri
-for d in "$ROOT"/pkgs/*/; do
+for d in "$ROOT"/pkgs/*/ "$ROOT"/tarayici/*/ tarayici-ortami; do
     name="$(basename "$d")"
     "$W/mkicon" icon "$name" "$ICONS/$name.png" 128 2>/dev/null || true
 done

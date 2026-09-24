@@ -1,12 +1,26 @@
 #!/bin/sh
 # udhcpc olay betiği: adresi, varsayılan rotayı ve DNS'i ayarlar.
 case "$1" in
-    deconfig) ip -4 addr flush dev "$interface"; ip link set "$interface" up ;;
+    deconfig)
+        ip -4 addr flush dev "$interface"
+        ip link set "$interface" up ;;
     bound|renew)
         ip -4 addr flush dev "$interface"
-        ip addr add "$ip/${mask:-24}" dev "$interface"
-        [ -n "$router" ] && ip route add default via ${router%% *} dev "$interface"
-        : > /etc/resolv.conf
-        for d in $dns; do echo "nameserver $d" >> /etc/resolv.conf; done ;;
+        ip addr add "$ip/${mask:-24}" ${broadcast:+broadcast $broadcast} dev "$interface"
+        if [ -n "$router" ]; then
+            ip route del default dev "$interface" 2>/dev/null
+            ip route add default via "${router%% *}" dev "$interface"
+        fi
+        if [ -n "$dns" ]; then
+            : > /etc/resolv.conf.new
+            [ -n "$domain" ] && echo "search $domain" >> /etc/resolv.conf.new
+            for d in $dns; do echo "nameserver $d" >> /etc/resolv.conf.new; done
+            mv /etc/resolv.conf.new /etc/resolv.conf
+            # tarayıcı çalışma ortamı (chroot) da yeni DNS'i görsün
+            [ -d /opt/tarayici/etc ] && cp /etc/resolv.conf /opt/tarayici/etc/resolv.conf
+        fi
+        logger -t ag "$interface: $ip (ağ geçidi ${router:-yok})" 2>/dev/null ;;
+    leasefail|nak)
+        logger -t ag "$interface: DHCP yanıtı yok" 2>/dev/null ;;
 esac
 exit 0

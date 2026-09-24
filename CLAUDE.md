@@ -2,8 +2,10 @@
 
 Linux çekirdeği tabanlı, kendi minimal Linux dağıtımım. Sistemin ana dili, benim
 yazdığım **Axs** programlama dilidir ([Nylithra/axs](https://github.com/Nylithra/axs)).
-Kullanıcı alanı; kendi init'im (C), kendi shell'im (`axsh`), Axs yorumlayıcısı (`axs`),
-paket yöneticisi (`axpkg`) ve kendi masaüstü ortamım **AxsDE** üzerine kuruludur.
+Kullanıcı alanı; kendi init'im (C), varsayılan kabuk GNU `bash` (kendi kabuğum `axsh` de var),
+Axs yorumlayıcısı (`axs`), paket yöneticisi (`axpkg`, internetten paket indirir) ve kendi masaüstü
+ortamım **AxsDE** üzerine kuruludur. Gerçek ağ kartı sürücüleriyle internete bağlanır; Firefox ve
+Chrome kurulu gelmez, paket yöneticisinden indirilir.
 Tek komutla derlenir; QEMU'da ve BIOS/UEFI ile açılan bir ISO olarak çalışır.
 
 ## Ortam
@@ -23,7 +25,8 @@ Tek komutla derlenir; QEMU'da ve BIOS/UEFI ile açılan bir ISO olarak çalış�
 | Komut | Açıklama |
 |---|---|
 | `./build.sh` | Her şeyi sırayla derler (indirme dahil). İlk derleme ~8 dk (4 çekirdek), sonrakiler artımlı (~25 sn). |
-| `./build.sh <aşama>` | Tek aşama: `kernel busybox init axsh python axs axsde apps axpkg initramfs iso` |
+| `./build.sh <aşama>` | Tek aşama: `kernel busybox init axsh python axs shell axsde apps axpkg initramfs iso` |
+| `sudo ./build.sh tarayici` | Uzak depo paketleri: `tarayici-ortami` (Ubuntu kütüphaneleri + Xvfb + xkopru), `firefox`, `google-chrome` → `build/uzak-depo/` (debootstrap + root ister; `./build.sh`'e dahil değil, CI yapar). |
 | `./build.sh deps` | Eksik derleme paketlerini kurar (sudo apt-get). |
 | `AXSOS_BUILD=/yol ./build.sh` | Derleme klasörünü değiştirir (`run.sh` de aynı değişkeni okur). |
 | `./build.sh clean` | `build/` çıktılarını siler, `build/downloads/` korunur. |
@@ -33,14 +36,16 @@ Tek komutla derlenir; QEMU'da ve BIOS/UEFI ile açılan bir ISO olarak çalış�
 | `./run.sh iso-uefi` | ISO'yu GRUB ile açar (UEFI/OVMF). |
 | `TIMEOUT=30 ./run.sh` | 30 sn sonra QEMU'yu kapatır. |
 | `VERBOSE=1 ./run.sh` | Kernel mesajlarını göster (`quiet` kapalı). |
-| `APPEND="..." ./run.sh` / `MEM=1G ./run.sh` | Ek kernel parametresi / bellek (varsayılan 512M). |
+| `APPEND="..." ./run.sh` / `MEM=4G ./run.sh` | Ek kernel parametresi / bellek (varsayılan metin 512M, masaüstü 2G; tarayıcı için 3-4G). |
 | `scripts/qemu-test.sh "cmd1" "cmd2"` | Otomatik test (metin): açar, komutları yazar, çıktıyı gösterir. `RUN_MODE=iso`, `BOOT_WAIT=20`, `CMD_WAIT=3` |
 | `scripts/ci-test.sh` | ISO açılış testi: metin kipinde axs/python/axpkg/poweroff ve masaüstü ekran görüntüsü (CI da bunu çalıştırır). |
+| `scripts/ci-tarayici-test.sh` | Tarayıcı testi: `build/uzak-depo`'yu sunar, ISO'da Firefox/Chrome'u resmi kaynaklardan kurup `https://example.com` ekran görüntüsü alır (internet gerekir; CI çalıştırır). |
 | `axsde --bench` | Görüntüsüz performans ölçümü (sürükleme, yazma, boyutlandırma, tam çizim, başlatıcı; ms/kare). Host'ta: `AXSDE_FONTS=build/fonts`, `AXSDE_BENCH_SHOT=a.ppm`. |
 | `scripts/qemu-gui.py wait:32 click:454,753 shot:/tmp/a.png` | Otomatik test (masaüstü): görüntüsüz QEMU + QMP; `click/dbl/drag/move/wheel/key/type/shot/wait`. `--iso` ile ISO'dan. Ekran 1280x800. |
 
 Aşama bağımlılıkları: `busybox/init/axsh/axpkg/axsde/python` → kernel başlıkları (`kernel`);
-`axs` → `python`; `apps` → `axsde` (stb + yazı tipleri); `axpkg` → `apps` (depoya paketler);
+`axs` → `python`; `shell` → `python` (statik OpenSSL/zlib); `apps` → `axsde` (stb + yazı tipleri);
+`axpkg` → `apps` (depoya paketler); `tarayici` → `apps` (xkopru) + `axpkg`;
 `initramfs` → hepsi; `iso` → `kernel` + `initramfs`.
 Bir market uygulamasını değiştirince: `./build.sh apps && ./build.sh axpkg && ./build.sh initramfs`.
 Kaynak değiştirince ilgili aşamayı, sonra `initramfs` (ve `iso`) aşamasını çalıştırın.
@@ -66,6 +71,11 @@ axsde/adp.h               AxsDE uygulama protokolü (soket mesajları)
 axsde/client/             libaxsapp: dış grafik uygulamaların kütüphanesi (axsapp.h)
 apps/<ad>/                Market uygulamaları: main.c + app.conf (paket bilgisi)
 apps/mkicon.c             Derlemede simge (128px PNG) ve örnek resim üretici (host'ta çalışır)
+apps/xkopru/              X uygulamalarını (Firefox/Chrome) AxsDE penceresinde gösteren köprü
+tarayici/                 Tarayıcı paketleri: tarayici-baslat (chroot + Xvfb + xkopru), firefox/, google-chrome/
+scripts/repo-index.sh     Depo INDEX'i üretir (MANIFEST + sha256 + boyut + komutlar + simgeler)
+scripts/ci-tarayici-test.sh, ci-web.py   Tarayıcı uçtan uca testi ve test HTTP sunucusu
+rootfs/sbin/ag            Ağ yöneticisi (DHCP, durum, test, sabit adres)
 scripts/novnc-server.py   Tarayıcı kipi: noVNC + WebSocket↔VNC köprüsü (tek port)
 scripts/qemu-gui.py       Masaüstü test aracı (QMP ile tıklama/yazma/ekran görüntüsü)
 pkgs/<ad>/                Terminal paketleri (MANIFEST + files/) → /var/lib/axpkg/repo/*.axp
@@ -79,6 +89,9 @@ build/                    (git'e girmez)
   stb/, fonts/            stb (truetype, image, image_write) ve yazı tipleri (Inter, JetBrains Mono)
   apps/, pkgs/, icons/    apps aşaması: libaxsapp nesneleri, uygulama paket dizinleri, simgeler
   novnc/                  noVNC istemcisi (yalnızca ./run.sh gui tarayıcı kipinde)
+  shell/                  bash, ncurses, nano, curl kaynakları ve derlemeleri
+  tarayici/rootfs/        tarayıcı çalışma ortamı (Ubuntu minbase + kütüphaneler; ~240 MB)
+  uzak-depo/              uzak depo: INDEX, *.axp, icon-*.png (CI "paketler" sürümüne yükler)
   sysroot/                bizim programlarımız + python + axs (initramfs'e eklenir)
   rootfs/                 initramfs'in birleştirilmiş hali
   out/bzImage, out/initramfs.cpio.gz, out/axsos.iso   Çıktılar
@@ -87,16 +100,29 @@ build/                    (git'e girmez)
 ## Mimari
 
 - **Kernel**: Linux 6.12 LTS, `tinyconfig` + fragment (seri/VGA/EFI-fb konsol, initramfs,
-  devtmpfs, ACPI poweroff, e1000/virtio-net, klavye). ~2.4 MB.
+  devtmpfs, ACPI poweroff, klavye, USB klavye/fare). ~2.9 MB. Ağ kartları: e1000 (QEMU,
+  VirtualBox, VMware), e1000e/igb/igc (Intel), r8169/8139 (Realtek), pcnet32, vmxnet3, virtio-net;
+  IPv4+IPv6. glibc programları için SysV IPC, POSIX mq, inotify, seccomp, ad alanları (tarayıcı
+  korumalı alanları). Wi-Fi yok.
 - **libc**: tüm kullanıcı alanı **musl** ile **statik** derlenir (`build/tools/axs-cc`).
   Paylaşımlı kütüphane yok; `/lib` yok.
 - **initramfs**: kernel'in `gen_init_cpio` aracıyla üretilir (root yetkisi gerekmez).
   Birleştirme sırası: BusyBox → `build/sysroot` → `rootfs/` (sonraki öncekinin üzerine yazar).
-- **init** (`/sbin/init`, `/init` → `sbin/init`): proc/sys/dev/devpts/tmp/run bağlar,
-  hostname `axsos`, `/etc/rc` (lo + eth0 DHCP), her etkin konsolda
-  (`/sys/class/tty/console/active`) logo + `/bin/axsh` başlatır ve yeniden açar.
+  Kök dosya sistemi tmpfs'tir; init sınırı belleğin %90'ına çıkarır (kurulan paketler RAM'de).
+- **init** (`/sbin/init`, `/init` → `sbin/init`): proc/sys/dev/devpts/dev/shm/tmp/run bağlar,
+  hostname `axsos`, `/etc/rc` (ağ), her etkin konsolda (`/sys/class/tty/console/active`)
+  logo + oturum kabuğu (`/bin/bash`, yoksa axsh, yoksa sh) başlatır ve yeniden açar.
+- **Ağ** (`/sbin/ag`, `/etc/rc`, `/etc/udhcpc.script`): açılışta tüm gerçek kartlar açılır,
+  `udhcpc` arka planda DHCP ile adres/rota/DNS alır ve kirayı yeniler; saat `ntpd` ile
+  eşitlenir (HTTPS için). `ag durum|yenile|test|sabit <kart> <ip/önek> <geçit> [dns]`.
+  Ayarlar > Ağ: kartlar (sürücü, bağlantı, MAC, IPv4, hız), ağ geçidi, DNS, yeniden bağlan.
+- **Kabuk**: GNU bash 5.2 (statik, musl; readline, iş kontrolü `fg/bg/jobs`, tamamlama).
+  `/etc/profile` + `/etc/bash.bashrc`: renkli istem (hata kodu), geçmiş, takma adlar
+  (`ll`, `kur`, `kaldir`, `guncelle`), `axpkg` tamamlama, bilinmeyen komutta hangi paketin
+  kurulacağını söyler (`axpkg provides`). Ek araçlar: `nano` (ncurses), `curl` (OpenSSL,
+  `/etc/ssl/certs/ca-certificates.crt`), BusyBox. Terminal `TERM=xterm-256color`.
   `poweroff`/`reboot`/`halt` BusyBox sinyalleri (SIGUSR2/SIGTERM/SIGUSR1) ile çalışır.
-- **axsh**: pipe, `> >> < 2> 2>&1`, `; && || &`, tırnak/kaçış, `$AD ${AD} $? $$ ~`, glob,
+- **axsh** (kendi kabuğum, `/bin/axsh`): pipe, `> >> < 2> 2>&1`, `; && || &`, tırnak/kaçış, `$AD ${AD} $? $$ ~`, glob,
   geçmiş (↑/↓, `history`, `!!`, `!n`, `~/.axsh_history`), UTF-8 satır düzenleme, Tab tamamlama.
   Genişletme her komut çalışmadan hemen önce yapılır. İş kontrolü (fg/bg) yok.
   Başlangıç dosyaları: `/etc/axshrc`, `~/.axshrc`.
@@ -111,9 +137,16 @@ build/                    (git'e girmez)
   depo `/var/lib/axpkg/repo/`. Komutlar: `install [-f] <dosya|ad>`, `remove [-f]`, `list`,
   `available`, `info`, `files`, `owner`, `create <dizin>`. Bağımlılıkları depodan çözer,
   dosya çakışmasını ve ters bağımlılığı denetler. `AXPKG_ROOT`/`AXPKG_REPO` ile host'ta
-  sahte kökte test edilebilir. Ek MANIFEST alanları (axpkg yok sayar, Market okur):
+  sahte kökte test edilebilir. **Uzak depo**: `/etc/axpkg/depolar` (varsayılan
+  `REMOTE_REPO` = GitHub "paketler" sürümü); `axpkg update` INDEX + simgeleri
+  `/var/lib/axpkg/remote/`'a indirir; yerelde olmayan paket curl ile indirilir, sha256
+  doğrulanır, kurulunca silinir. `search [kelime]`, `upgrade`, `provides <komut>`, `names`.
+  Kurulum betiği başarısız olursa kurulum geri alınır. Dosyalar hedefle aynı dosya sisteminde
+  açılıp taşınır (büyük paketlerde RAM iki kat harcanmaz). `AXPKG_REMOTE="url ..."` ile test.
+  Ek MANIFEST alanları (axpkg yok sayar, Market okur):
   `title`, `category` (Oyunlar/Araçlar/Grafik/Axs/Sistem), `about`, `app` (grafik uygulama
-  kimliği), `run` (terminalde çalışacak komut), `open` (açılacak yol).
+  kimliği), `run` (terminalde çalışacak komut), `open` (açılacak yol), `extra_size`
+  (kurulum betiğinin ayrıca indirdiği bayt).
   Depoda `INDEX` (tüm MANIFEST'ler + `file`, `size`, `installed_size`; kayıtlar boş satırla
   ayrılır), `icons/<ad>.png` ve `PREINSTALL` (initramfs aşamasında `AXPKG_ROOT` ile hazır
   kurulanlar: hesap-makinesi, saat, resim-gorucu) bulunur.
@@ -132,9 +165,20 @@ build/                    (git'e girmez)
   - Uygulamalar: Terminal (pty + axsh, xterm alt kümesi, 256/24 bit renk, geri kaydırma),
     Dosyalar, **Axs Stüdyo** (Axs sözdizimi renklendirme, otomatik girinti, F5 ile çalıştır,
     çıktı paneli), **Uygulama Marketi**, Sistem İzleyici, Ayarlar, Hoş Geldin.
-  - **Uygulama Marketi** (`app_packages.c`): depo `INDEX`'ini okur; kategoriler (Keşfet,
-    Oyunlar, Araçlar, Grafik, Axs, Sistem, Kurulu), öne çıkan afiş, kart ızgarası, Türkçe
-    duyarsız arama (ı/i, ş/s…), ayrıntı sayfası; Kur/Aç/Güncelle/Kaldır `axpkg` ile arka planda.
+  - **Uygulama Marketi** (`app_packages.c`): yerel + uzak depo `INDEX`'lerini okur (ağ varsa
+    açılışta uzak dizini arka planda yeniler, ⟳ düğmesi); kategoriler (Keşfet, İnternet,
+    Oyunlar, Araçlar, Grafik, Axs, Sistem, Kurulu), öne çıkan afiş, kart ızgarası ("İnternetten
+    • ~boyut"), Türkçe duyarsız arama (ı/i, ş/s…), ayrıntı sayfası; Kur/Aç/Güncelle/Kaldır
+    `axpkg` ile arka planda, indirme ilerlemesi kenar çubuğunda.
+  - **Tarayıcılar** (Firefox, Google Chrome; uzak depo): glibc/GTK/X11 ister, AxsOS ise musl ve
+    X'siz. `tarayici-ortami` paketi `/opt/tarayici`'ye küçük bir Ubuntu 24.04 kökü (Xvfb,
+    matchbox, GTK, NSS, yazı tipleri; Mesa/LLVM çıkarılmış) + `xkopru` kurar. `firefox` /
+    `google-chrome` paketleri kurulurken tarayıcıyı resmi kaynaktan indirir (mozilla.org Türkçe
+    tar.xz / dl.google.com .deb). `tarayici-baslat`: chroot bağlamaları (proc, sys, dev, shm,
+    tmp, ~/İndirilenler), Xvfb `:1`/`:2` (`-fbdir`), setxkbmap (TR/US), tarayıcı `axs` (uid
+    1000) kullanıcısıyla (kendi korumalı alanıyla), `xkopru` pencere; pencere kapanınca tarayıcı
+    kapanır. `xkopru` ekran belleğini (XWD) eşleyip yalnızca değişen satırları gönderir,
+    klavye/fareyi ham X11 protokolüyle XTEST'e iletir (Xlib yok). `--basliksiz` ile ekransız.
   - **Market uygulamaları** (ayrı süreçler, `apps/`): Hesap Makinesi, Saat (kronometre,
     zamanlayıcı), Takvim (tatiller, notlar), Resim Görüntüleyici (+ örnek resimler), Çizim
     (PNG kaydı `~/Resimler`), Yılan, 2048, Mayın Tarlası. Terminal paketleri (`pkgs/`) de
@@ -164,22 +208,26 @@ build/                    (git'e girmez)
 ## GitHub Actions (`.github/workflows/build.yml`)
 
 Her push'ta: `./build.sh deps` → `./build.sh` → `scripts/ci-test.sh` (ISO QEMU'da açılıp test
-edilir; başarısızsa yayın yapılmaz) → artifact (ISO, SHA256SUMS, ekran.png, seri günlük) →
-**Releases'te `son-surum`** ön sürümü güncellenir. `v*` etiketi gönderilince
+edilir; başarısızsa yayın yapılmaz) → `sudo ./build.sh tarayici` → `scripts/ci-tarayici-test.sh`
+(ISO'da Firefox ve Chrome internetten kurulup sayfa açar) → artifact (ISO, SHA256SUMS,
+ekran görüntüleri, seri günlükler) → **`paketler`** sürümüne uzak depo (INDEX, .axp, simgeler)
+yüklenir → **Releases'te `son-surum`** ön sürümü güncellenir. `v*` etiketi gönderilince
 (`git tag v0.2 && git push origin v0.2`) kalıcı sürüm oluşur. `build/downloads` ve
 `build/deps` (statik zlib/OpenSSL/SQLite) `config/versions.sh` özetine göre önbelleklenir.
 
 ## İndirme kaynakları
 
 Her bileşen önce resmi kaynaktan (kernel.org, busybox.net) denenir, erişilemezse GitHub
-aynasından `git clone --depth 1` yapılır (gregkh/linux, mirror/busybox, python/cpython,
+aynasından `git clone --depth 1` yapılır. bash, ncurses, nano (ftp.gnu.org) ve curl (curl.se)
+erişilemezse Ubuntu arşivindeki aynı sürümün özgün (`orig`) arşivinden alınır (gregkh/linux, mirror/busybox, python/cpython,
 openssl/openssl, madler/zlib, sqlite/sqlite, Nylithra/axs, nothings/stb, rsms/inter,
 JetBrains/JetBrainsMono, novnc/noVNC). Yazı tipleri seyrek klonla tek dosya olarak alınır.
 
 ## Çalışma kuralları
 
 - Aşamalar: 1) kernel 2) BusyBox + initramfs 3) C init 4) axsh 5) axs dili
-  6) axpkg 7) bootable ISO 8) AxsDE masaüstü 9) Uygulama Marketi + uygulamalar. Hepsi tamamlandı.
+  6) axpkg 7) bootable ISO 8) AxsDE masaüstü 9) Uygulama Marketi + uygulamalar
+  10) bash + gerçek ağ + uzak depo + Firefox/Chrome. Hepsi tamamlandı.
 - Masaüstü değişikliklerini `scripts/qemu-gui.py` ile ekran görüntüsü alarak doğrula.
 - Her değişiklikten sonra QEMU'da test et (`scripts/qemu-test.sh`), git commit at.
 - Her şey `./build.sh` ve `./run.sh` ile yeniden üretilebilir kalmalı; elle adım yok.

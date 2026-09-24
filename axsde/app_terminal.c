@@ -1,4 +1,4 @@
-/* AxsDE - Terminal uygulaması: pty içinde axsh */
+/* AxsDE - Terminal uygulaması: pty içinde bash (yoksa axsh) */
 #include "axsde.h"
 
 #include <stdio.h>
@@ -38,16 +38,20 @@ static void t_init(Win *w, const char *arg)
     const char *home = getenv("HOME");
     if (arg && *arg) {
         st->is_cmd = 1;
-        char *argv[] = { "/bin/axsh", "-c", (char *)arg, NULL };
-        term_spawn(st->t, argv, home);
+        char *argv[] = { "/bin/bash", "-c", (char *)arg, NULL };
+        if (term_spawn(st->t, argv, home) < 0) {
+            char *ax[] = { "/bin/axsh", "-c", (char *)arg, NULL };
+            term_spawn(st->t, ax, home);
+        }
     } else {
-        char *argv[] = { "-axsh", NULL };
-        /* argv[0] "-" ile başlarsa oturum kabuğu; execvp yol için gerçek adı ister */
-        char *real[] = { "/bin/axsh", NULL };
-        (void)argv;
-        if (term_spawn(st->t, real, home) < 0) {
-            char *sh[] = { "/bin/sh", NULL };
-            term_spawn(st->t, sh, home);
+        /* oturum kabuğu: /etc/profile + /etc/bash.bashrc okunur */
+        char *argv[] = { "/bin/bash", "-l", NULL };
+        if (term_spawn(st->t, argv, home) < 0) {
+            char *ax[] = { "/bin/axsh", NULL };
+            if (term_spawn(st->t, ax, home) < 0) {
+                char *sh[] = { "/bin/sh", NULL };
+                term_spawn(st->t, sh, home);
+            }
         }
     }
 }
@@ -154,7 +158,7 @@ static void t_close(Win *w)
 }
 
 const App APP_TERMINAL = {
-    .id = "terminal", .name = "Terminal", .desc = "axsh kabuğu",
+    .id = "terminal", .name = "Terminal", .desc = "bash kabuğu",
     .icon = IC_TERMINAL, .w = 760, .h = 440,
     .init = t_init, .draw = t_draw, .key = t_key, .mouse = t_mouse,
     .fds = t_fds, .io = t_io, .tick = t_tick, .resize = t_resize, .close = t_close,

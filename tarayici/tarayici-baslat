@@ -1,0 +1,135 @@
+#!/bin/sh
+# tarayici-baslat <firefox|chrome> [adres...]
+#   Tarayıcıyı /opt/tarayici (Ubuntu kütüphaneleri) içinde, Xvfb ekranında çalıştırır ve
+#   xkopru ile AxsDE penceresinde gösterir. Tarayıcı açıkken yeniden çağrılırsa verilen adresi
+#   aynı pencerede açar.
+# tarayici-baslat --basliksiz <firefox|chrome> [seçenekler...]
+#   Ekransız çalıştır (ör. --headless --screenshot); CI testi ve betikler için.
+# tarayici-baslat --kapat-hepsi
+#   Tüm tarayıcıları ve X sunucularını kapatır, chroot bağlamalarını çözer.
+R=/opt/tarayici
+UID_AXS=1000
+
+bagli() { grep -q " $1 " /proc/mounts; }
+bagla() {
+    bagli "$R$1" && return 0
+    mkdir -p "$R$1" && mount -o bind "$1" "$R$1"
+}
+coz() {
+    for m in /home/axs/İndirilenler /tmp /dev/shm /dev/pts /dev /sys /proc; do
+        bagli "$R$m" && umount -l "$R$m" 2>/dev/null
+    done
+}
+
+if [ "$1" = --kapat-hepsi ]; then
+    pkill -f '^/opt/firefox/' 2>/dev/null
+    pkill -f '^/opt/google/chrome/' 2>/dev/null
+    pkill -f 'Xvfb :[0-9]' 2>/dev/null
+    pkill xkopru 2>/dev/null
+    sleep 1
+    coz
+    exit 0
+fi
+
+BASLIKSIZ=
+[ "${1:-}" = --basliksiz ] && { BASLIKSIZ=1; shift; }
+app="${1:-}"
+[ $# -gt 0 ] && shift
+case "$app" in
+firefox)
+    BIN=/opt/firefox/firefox; PAT=/opt/firefox/; D=1; TITLE=Firefox; PAKET=firefox
+    set -- "$@" ;;
+chrome|google-chrome)
+    BIN=/opt/google/chrome/google-chrome; PAT=/opt/google/chrome/; D=2; TITLE="Google Chrome"; PAKET=google-chrome
+    set -- --no-first-run --no-default-browser-check --password-store=basic --disable-dev-shm-usage \
+        --disable-gpu ${TARAYICI_KORUMASIZ:+--no-sandbox} "$@" ;;
+*)
+    echo "kullanım: tarayici-baslat <firefox|chrome> [adres...]" >&2; exit 1 ;;
+esac
+if [ ! -x "$R$BIN" ]; then
+    echo "$TITLE kurulu değil. Kurmak için: axpkg install $PAKET" >&2
+    exit 1
+fi
+
+# --- chroot bağlamaları (bir kez) ---
+bagla /proc && bagla /sys && bagla /dev && bagla /dev/pts && bagla /dev/shm && bagla /tmp \
+    || { echo "tarayici: dosya sistemleri bağlanamadı" >&2; exit 1; }
+mkdir -p /root/İndirilenler && chmod 777 /root/İndirilenler
+mkdir -p "$R/home/axs/İndirilenler"
+bagli "$R/home/axs/İndirilenler" || mount -o bind /root/İndirilenler "$R/home/axs/İndirilenler"
+cp /etc/resolv.conf "$R/etc/resolv.conf" 2>/dev/null
+cp /etc/hosts "$R/etc/hosts" 2>/dev/null
+chown -R $UID_AXS:$UID_AXS "$R/home/axs" 2>/dev/null
+
+# --- ayarlar: ekran boyutu, saat dilimi, klavye düzeni (AxsDE ile aynı) ---
+sw=1280; sh=800
+if [ -r /sys/class/graphics/fb0/virtual_size ]; then
+    IFS=, read sw sh < /sys/class/graphics/fb0/virtual_size
+fi
+W=$(( (sw - 80) / 8 * 8 )); H=$(( sh - 160 ))
+[ $W -lt 640 ] && W=640; [ $H -lt 400 ] && H=400
+tz=$(sed -n 's/^tz=//p' /etc/axsde.conf 2>/dev/null); tz=${tz:-180}
+if [ "$tz" -ge 0 ]; then s=-; a=$tz; n=+; else s=; a=$(( -tz )); n=-; fi
+TZV=$(printf '<%s%02d%02d>%s%d:%02d' "$n" $((a / 60)) $((a % 60)) "$s" $((a / 60)) $((a % 60)))
+lay=$(sed -n 's/^layout=//p' /etc/axsde.conf 2>/dev/null)
+[ "${lay:-0}" = 1 ] && KB=us || KB=tr
+
+ENVV="HOME=/home/axs USER=axs LOGNAME=axs DISPLAY=:$D TZ=$TZV LANG=C.UTF-8 \
+PATH=/usr/local/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/tmp/xdg-axs XDG_DOWNLOAD_DIR=/home/axs/İndirilenler"
+mkdir -p /tmp/xdg-axs && chown $UID_AXS:$UID_AXS /tmp/xdg-axs && chmod 700 /tmp/xdg-axs
+
+calistir() { # tarayıcıyı axs kullanıcısıyla çalıştır
+    chroot "$R" setpriv --reuid=$UID_AXS --regid=$UID_AXS --init-groups env -i $ENVV "$BIN" "$@"
+}
+
+if [ -n "$BASLIKSIZ" ]; then
+    calistir "$@"
+    exit $?
+fi
+
+KILIT=/tmp/tarayici-$D.pid
+if [ -f "$KILIT" ] && kill -0 "$(cat "$KILIT")" 2>/dev/null; then
+    # zaten açık: adresi mevcut pencerede aç
+    calistir "$@" >/dev/null 2>&1 &
+    exit 0
+fi
+echo $$ > "$KILIT"
+
+# --- X sunucusu (Xvfb) + pencere yöneticisi ---
+rm -rf "/tmp/xvfb$D" "/tmp/.X11-unix/X$D" "/tmp/.X$D-lock"
+mkdir -p "/tmp/xvfb$D" /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+chroot "$R" Xvfb ":$D" -screen 0 "${W}x${H}x24" -fbdir "/tmp/xvfb$D" -nolisten tcp -ac -noreset \
+    >"/tmp/xvfb$D.log" 2>&1 &
+XVFB=$!
+i=0
+while [ ! -S "/tmp/.X11-unix/X$D" ] && [ $i -lt 100 ]; do usleep 100000; i=$((i + 1)); done
+if [ ! -S "/tmp/.X11-unix/X$D" ]; then
+    echo "tarayici: X sunucusu başlatılamadı (bkz. /tmp/xvfb$D.log)" >&2
+    rm -f "$KILIT"; exit 1
+fi
+chroot "$R" env DISPLAY=":$D" setxkbmap "$KB" 2>/dev/null
+chroot "$R" env DISPLAY=":$D" matchbox-window-manager -use_titlebar no >/dev/null 2>&1 &
+WM=$!
+
+# --- tarayıcı + köprü penceresi ---
+calistir "$@" >"/tmp/$PAKET.log" 2>&1 &
+AXSDE_APP_ID="${AXSDE_APP_ID:-$PAKET}" /usr/bin/xkopru --display "$D" --fb "/tmp/xvfb$D/Xvfb_screen0" --title "$TITLE" &
+KOPRU=$!
+
+# Pencere kapatılırsa tarayıcıyı kapat; tarayıcı kapanırsa pencereyi kapat.
+# (Tarayıcı kendini yeniden başlatabilir; bu yüzden süreç adına göre izlenir.)
+yok=0
+while :; do
+    sleep 1
+    if ! kill -0 $KOPRU 2>/dev/null; then
+        pkill -TERM -f "^$PAT" 2>/dev/null
+        i=0; while pgrep -f "^$PAT" >/dev/null && [ $i -lt 10 ]; do sleep 1; i=$((i + 1)); done
+        pkill -KILL -f "^$PAT" 2>/dev/null
+        break
+    fi
+    if pgrep -f "^$PAT" >/dev/null; then yok=0; else yok=$((yok + 1)); fi
+    [ $yok -ge 3 ] && { kill $KOPRU 2>/dev/null; break; }
+done
+kill $WM $XVFB 2>/dev/null
+rm -f "$KILIT"
+exit 0

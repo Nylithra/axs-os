@@ -1,0 +1,33 @@
+#!/bin/sh
+# Firefox'un resmi Linux sürümünü (Türkçe) Mozilla'dan indirip /opt/tarayici/opt/firefox'a kurar.
+R=/opt/tarayici
+URL="https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=tr"
+D="$R/opt/.firefox-indir"
+rm -rf "$D" && mkdir -p "$D"
+echo "Firefox indiriliyor (download.mozilla.org)..."
+if ! curl -fL --retry 3 --connect-timeout 20 ${AXPKG_PROGRESS:+--progress-bar} -o "$D/firefox.tar" "$URL"; then
+    echo "HATA: Firefox indirilemedi. İnternet bağlantısını denetleyin: ag test" >&2
+    rm -rf "$D"; exit 1
+fi
+echo "Arşiv açılıyor..."
+rm -rf "$R/opt/firefox"
+# GNU tar sıkıştırmayı (xz/bz2) kendisi tanır
+if ! chroot "$R" tar -xf /opt/.firefox-indir/firefox.tar -C /opt; then
+    echo "HATA: arşiv açılamadı" >&2; rm -rf "$D"; exit 1
+fi
+rm -rf "$D"
+# Kurumsal ilkeler: güncelleme denetimi yok (paket yöneticisi günceller), indirme klasörü
+mkdir -p "$R/opt/firefox/distribution"
+cat > "$R/opt/firefox/distribution/policies.json" <<'EOP'
+{
+  "policies": {
+    "DisableAppUpdate": true,
+    "DontCheckDefaultBrowser": true,
+    "DefaultDownloadDirectory": "/home/axs/İndirilenler",
+    "OverrideFirstRunPage": "",
+    "NoDefaultBookmarks": false
+  }
+}
+EOP
+V=$(sed -n 's/^Version=//p' "$R/opt/firefox/application.ini" 2>/dev/null | head -1)
+echo "Firefox ${V:-?} kuruldu. Başlatmak için: firefox (ya da Market'te Aç)"
