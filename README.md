@@ -31,6 +31,8 @@ if not exist "AxsOS\axsos.iso" (
 )
 
 echo AxsOS baslatiliyor... (kapatmak icin AxsOS icinde: poweroff)
-"%QEMU%" -m 512M -cdrom "AxsOS\axsos.iso" -boot d -name AxsOS -netdev user,id=n0 -device e1000,netdev=n0
+rem 4G bellek: Firefox/Chrome icin gerekli (tarayicisiz 2G yeter). whpx: Windows donanim hizlandirmasi
+rem (Windows ozellikleri > "Windows Hypervisor Platform"); yoksa tcg (yazilim) kullanilir.
+"%QEMU%" -m 4G -smp 2 -accel whpx -accel tcg -cdrom "AxsOS\axsos.iso" -boot d -name AxsOS -netdev user,id=n0 -device e1000,netdev=n0 -device virtio-tablet-pci -device virtio-keyboard-pci
 
 ```
