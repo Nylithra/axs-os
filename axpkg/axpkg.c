@@ -40,6 +40,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -428,7 +429,8 @@ typedef struct {
     char name[128], version[64], description[512], depends[1024];
     char file[256], sha256[80], provides[1024], url[512], icon[256];
     char base[512];   /* uzak deponun adresi (yerelse boş) */
-    long size;
+    long size, isize;
+    long min_ram;     /* MB: bu paket (ve çalıştırdığı program) için gereken en az bellek */
     int local;
 } IndexEnt;
 
@@ -472,6 +474,8 @@ static int index_walk(const char *path, const char *base, int local,
         S("file", file); S("sha256", sha256); S("provides", provides); S("url", url);
         S("icon", icon);
         else if (!strcmp(k, "size")) e.size = atol(v);
+        else if (!strcmp(k, "installed_size")) e.isize = atol(v);
+        else if (!strcmp(k, "min_ram")) e.min_ram = atol(v);
 #undef S
     }
     fclose(f);
@@ -569,8 +573,24 @@ static int run_capture_line(char *const argv[], char *out, size_t n)
 }
 
 /* Uzak paketi önbelleğe indir, sha256'yı doğrula. 0 = tamam */
+/* Kök dosya sisteminde boş yer (MB); canlı sistemde bu RAM'dir */
+static long free_mb(void)
+{
+    struct statvfs sv;
+    char p[PATH_MAX];
+    snprintf(p, sizeof p, "%s/", root);
+    if (statvfs(p, &sv) != 0)
+        return -1;
+    return (long)((unsigned long long)sv.f_bavail * sv.f_frsize / 1048576ULL);
+}
+
 static int download_pkg(const IndexEnt *e, char *path, size_t n)
 {
+    /* indirilen arşiv + açılmış hali aynı anda bellekte durur */
+    long need = (e->size + e->isize) / 1048576 + 16, have = free_mb();
+    if (have >= 0 && have < need)
+        return fail("%s için ~%ld MB boş yer gerekli, şu an %ld MB boş. AxsOS her şeyi RAM'de tutar: "
+                    "sanal makineye daha çok bellek verin (tarayıcılar için en az 3-4 GB).", e->name, need, have);
     char url[1024];
     if (e->url[0])
         snprintf(url, sizeof url, "%s", e->url);
@@ -990,6 +1010,19 @@ static int install_one(const char *arg, int force, int depth)
         return install_file(path, force, depth);
     if (!have_ix)
         return fail("'%s' paketi bulunamadı. Depo dizinini yenilemek için: axpkg update", arg);
+    if (ie.min_ram && !force) { /* hiçbir şey indirmeden önce denetle */
+        FILE *mf = fopen("/proc/meminfo", "r");
+        long kb = 0;
+        if (mf) {
+            if (fscanf(mf, "MemTotal: %ld", &kb) != 1)
+                kb = 0;
+            fclose(mf);
+        }
+        if (kb && kb / 1024 < ie.min_ram - 64) /* çekirdeğin ayırdığı payı tolere et */
+            return fail("%s en az %ld MB bellek ister, bu makinede %ld MB var. AxsOS her şeyi RAM'de tutar: "
+                        "sanal makineye daha çok bellek verin (QEMU: -m 4G). Yine de denemek için: axpkg install -f %s",
+                        ie.name, ie.min_ram, kb / 1024, ie.name);
+    }
     if (download_pkg(&ie, path, sizeof path) != 0)
         return 1;
     int rc = install_file(path, force, depth);

@@ -1,8 +1,16 @@
 #!/bin/sh
 # Google Chrome'un resmi .deb paketini Google'dan indirip /opt/tarayici içine açar.
 R=/opt/tarayici
-URL="https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+URL="${CHROME_URL:-https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb}"
 D="$R/opt/.chrome-indir"
+GEREKEN=650   # MB: .deb ~140 MB + açılmış Chrome ~400 MB + pay
+bos=$(stat -f -c '%a %S' / | awk '{print int($1 * $2 / 1048576)}')
+if [ "${bos:-0}" -lt $GEREKEN ]; then
+    tot=$(awk '/MemTotal/ {print int($2 / 1024)}' /proc/meminfo)
+    echo "HATA: bellek yetersiz: Chrome için ~$GEREKEN MB boş yer gerekli, şu an ${bos} MB boş (toplam bellek $tot MB)." >&2
+    echo "HATA: AxsOS her şeyi RAM'de tutar; sanal makineye en az 3 GB (önerilen 4 GB) bellek verip yeniden deneyin (QEMU: -m 4G)." >&2
+    exit 1
+fi
 rm -rf "$D" && mkdir -p "$D"
 echo "Google Chrome indiriliyor (dl.google.com)..."
 if ! curl -fL --retry 3 --connect-timeout 20 ${AXPKG_PROGRESS:+--progress-bar} -o "$D/chrome.deb" "$URL"; then

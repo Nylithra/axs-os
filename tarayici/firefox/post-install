@@ -1,21 +1,54 @@
 #!/bin/sh
 # Firefox'un resmi Linux sürümünü (Türkçe) Mozilla'dan indirip /opt/tarayici/opt/firefox'a kurar.
+# Arşiv indirilirken açılır (ayrıca ~90 MB'lık kopya tutulmaz; her şey RAM'de).
+set -o pipefail
 R=/opt/tarayici
-URL="https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=tr"
-D="$R/opt/.firefox-indir"
-rm -rf "$D" && mkdir -p "$D"
+URL="${FIREFOX_URL:-https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=tr}"
+YENI="$R/opt/.firefox-yeni"
+GEREKEN=400   # MB: açılmış Firefox ~300 MB + pay
+
+bos=$(stat -f -c '%a %S' / | awk '{print int($1 * $2 / 1048576)}')
+if [ "${bos:-0}" -lt $GEREKEN ]; then
+    tot=$(awk '/MemTotal/ {print int($2 / 1024)}' /proc/meminfo)
+    echo "HATA: bellek yetersiz: Firefox için ~$GEREKEN MB boş yer gerekli, şu an ${bos} MB boş (toplam bellek $tot MB)." >&2
+    echo "HATA: AxsOS her şeyi RAM'de tutar; sanal makineye en az 3 GB (önerilen 4 GB) bellek verip yeniden deneyin (QEMU: -m 4G)." >&2
+    exit 1
+fi
+
 echo "Firefox indiriliyor (download.mozilla.org)..."
-if ! curl -fL --retry 3 --connect-timeout 20 ${AXPKG_PROGRESS:+--progress-bar} -o "$D/firefox.tar" "$URL"; then
-    echo "HATA: Firefox indirilemedi. İnternet bağlantısını denetleyin: ag test" >&2
-    rm -rf "$D"; exit 1
+# asıl dosya adresi (sıkıştırma türü: yeni sürümler .tar.xz, eskiler .tar.bz2)
+SON=$(curl -fsIL -o /dev/null --connect-timeout 20 -w '%{url_effective}' "$URL")
+if [ -z "$SON" ]; then
+    echo "HATA: Firefox indirilemedi (mozilla.org'a ulaşılamadı). İnternet bağlantısını denetleyin: ag test" >&2
+    exit 1
 fi
-echo "Arşiv açılıyor..."
+case "$SON" in
+    *.tar.xz) Z=J ;;
+    *.tar.bz2) Z=j ;;
+    *) Z=a ;;
+esac
+rm -rf "$YENI" && mkdir -p "$YENI"
+if [ "$Z" = a ]; then
+    # bilinmeyen biçim: önce dosyaya indir, GNU tar biçimi kendisi tanısın
+    curl -fL --retry 3 ${AXPKG_PROGRESS:+--progress-bar} -o "$YENI/firefox.tar" "$SON" \
+        && chroot "$R" tar -xf /opt/.firefox-yeni/firefox.tar -C /opt/.firefox-yeni && rm -f "$YENI/firefox.tar"
+else
+    curl -fL --retry 3 ${AXPKG_PROGRESS:+--progress-bar} "$SON" | chroot "$R" tar -x${Z}f - -C /opt/.firefox-yeni
+fi
+rc=$?
+if [ $rc != 0 ] || [ ! -x "$YENI/firefox/firefox" ]; then
+    bos=$(stat -f -c '%a %S' / | awk '{print int($1 * $2 / 1048576)}')
+    if [ "${bos:-0}" -lt 20 ]; then
+        echo "HATA: açarken bellek doldu. Sanal makineye en az 3-4 GB bellek verin." >&2
+    else
+        echo "HATA: Firefox indirilemedi ya da açılamadı (kod $rc). İnternet bağlantısını denetleyin: ag test" >&2
+    fi
+    rm -rf "$YENI"
+    exit 1
+fi
 rm -rf "$R/opt/firefox"
-# GNU tar sıkıştırmayı (xz/bz2) kendisi tanır
-if ! chroot "$R" tar -xf /opt/.firefox-indir/firefox.tar -C /opt; then
-    echo "HATA: arşiv açılamadı" >&2; rm -rf "$D"; exit 1
-fi
-rm -rf "$D"
+mv "$YENI/firefox" "$R/opt/firefox"
+rm -rf "$YENI"
 # Kurumsal ilkeler: güncelleme denetimi yok (paket yöneticisi günceller), indirme klasörü
 mkdir -p "$R/opt/firefox/distribution"
 cat > "$R/opt/firefox/distribution/policies.json" <<'EOP'

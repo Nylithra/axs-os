@@ -100,7 +100,7 @@ enum { ACT_NONE, ACT_POWEROFF, ACT_REBOOT, ACT_CONSOLE, ACT_TERMINAL, ACT_WALLPA
        ACT_SETTINGS, ACT_ABOUT, ACT_FILES, ACT_STUDIO };
 
 /* bildirimler */
-typedef struct { char title[64], body[160]; IconId icon; long until; } Notif;
+typedef struct { char title[64], body[320]; IconId icon; long until; } Notif;
 static Notif notifs[4];
 static int nnotif;
 
@@ -498,7 +498,7 @@ static Rect title_btn_rect(Win *w, int i)
 /* Bildirimler ve menüler                                              */
 /* ------------------------------------------------------------------ */
 
-static Rect notif_rect(int i) { return (Rect){ SCREEN_W - 380, BAR_H + 12 + i * 86, 364, 74 }; }
+static Rect notif_rect(int i) { return (Rect){ SCREEN_W - 380, BAR_H + 12 + i * 94, 364, 84 }; }
 
 void wm_notify(const char *title, const char *body, IconId icon)
 {
@@ -510,7 +510,7 @@ void wm_notify(const char *title, const char *body, IconId icon)
     snprintf(n->title, sizeof n->title, "%s", title);
     snprintf(n->body, sizeof n->body, "%s", body ? body : "");
     n->icon = icon;
-    n->until = now_ms() + 4500;
+    n->until = now_ms() + (strlen(n->body) > 50 ? 10000 : 4500); /* uzun (hata) iletileri daha uzun kalsın */
     for (int i = 0; i < 4; i++)
         wm_damage(notif_rect(i));
 }
@@ -898,7 +898,7 @@ static void draw_notifs(Surf *s)
         stroke_rrect(s, r, 16, 1, ALPHA(HEX(0xFFFFFF), 30));
         draw_icon(s, notifs[i].icon, r.x + 14, r.y + 17, 40);
         draw_text_fit(s, F_UI_BOLD, 14, r.x + 68, r.y + 14, r.w - 84, T.text, notifs[i].title);
-        draw_text_fit(s, F_UI, 13, r.x + 68, r.y + 38, r.w - 84, T.subtext, notifs[i].body);
+        draw_text_wrap(s, F_UI, 13, r.x + 68, r.y + 36, r.w - 84, 2, 17, T.subtext, notifs[i].body);
     }
 }
 

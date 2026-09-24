@@ -49,7 +49,12 @@ chrome|google-chrome)
     echo "kullanım: tarayici-baslat <firefox|chrome> [adres...]" >&2; exit 1 ;;
 esac
 if [ ! -x "$R$BIN" ]; then
-    echo "$TITLE kurulu değil. Kurmak için: axpkg install $PAKET" >&2
+    if [ -d "/var/lib/axpkg/db/$PAKET" ]; then
+        echo "$TITLE paketi kurulu ama programın kendisi eksik (indirme yarım kalmış olabilir)." >&2
+        echo "Yeniden kurmak için: axpkg install -f $PAKET" >&2
+    else
+        echo "$TITLE kurulu değil. Kurmak için: axpkg install $PAKET" >&2
+    fi
     exit 1
 fi
 

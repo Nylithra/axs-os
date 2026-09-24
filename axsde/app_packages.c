@@ -650,6 +650,30 @@ static void m_io(Win *w, int fd)
         snprintf(msg, sizeof msg, "%s %s", title[0] ? title : st->busy_name,
                  ok ? (st->busy_install ? "kuruldu. Başlatıcıda ve Market'te “Aç” ile başlat." : "kaldırıldı.")
                     : "işlemi başarısız oldu.");
+        if (!ok) { /* nedeni göster: betiğin "HATA:" satırı, yoksa axpkg'nin "hata:" satırı */
+            char tmp[2048], clean[2048], *o = clean, *best = NULL, *gen = NULL;
+            snprintf(tmp, sizeof tmp, "%s", st->log);
+            for (char *p = tmp; *p && o < clean + sizeof clean - 1; p++) { /* renk kodlarını at */
+                if (*p == '\033') {
+                    while (*p && *p != 'm')
+                        p++;
+                    if (!*p)
+                        break;
+                    continue;
+                }
+                *o++ = *p;
+            }
+            *o = 0;
+            for (char *t = strtok(clean, "\n\r"); t; t = strtok(NULL, "\n\r")) {
+                if (strstr(t, "HATA: ") && !best)
+                    best = strstr(t, "HATA: ") + 6; /* ilk HATA satırı: asıl neden */
+                else if (strstr(t, "hata: "))
+                    gen = strstr(t, "hata: ") + 6;
+            }
+            const char *why = best ? best : gen;
+            if (why)
+                snprintf(msg, sizeof msg, "%s: %s", title[0] ? title : st->busy_name, why);
+        }
         wm_notify(ok ? "Uygulama Marketi" : "Uygulama Marketi — hata", msg, IC_PACKAGES);
         proc_free(&st->job);
         st->busy = 0;
