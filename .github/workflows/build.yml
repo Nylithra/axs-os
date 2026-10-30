@@ -56,8 +56,10 @@ jobs:
           sudo -E env "PATH=$PATH" ./build.sh tarayici
           sudo chown -R "$(id -u):$(id -g)" build
 
-      - name: Tarayıcı uçtan uca testi (Firefox ve Chrome resmi kaynaklardan kurulup açılır)
-        run: scripts/ci-tarayici-test.sh
+      - name: Tarayıcı ve WTA uçtan uca testi (Firefox, Chrome ve Wine resmi kaynaklardan kurulup çalışır)
+        run: |
+          sudo apt-get install -y gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 >/dev/null
+          scripts/ci-tarayici-test.sh
 
       - name: Sürüm bilgisi
         id: info
@@ -83,6 +85,7 @@ jobs:
             build/out/firefox.png
             build/out/chrome.png
             build/out/firefox-masaustu.png
+            build/out/wta-masaustu.png
           compression-level: 0
           if-no-files-found: ignore
 
@@ -98,6 +101,12 @@ jobs:
           **Tarayıcılar:** kurulu gelmez; Uygulama Marketi'nden (İnternet) ya da terminalden
           \`axpkg install firefox\` / \`axpkg install google-chrome\` ile internetten kurulur.
           Tarayıcı için sanal makineye en az 3-4 GB bellek verin.
+
+          **Windows programları (WTA):** Uygulama Marketi'nden "WTA — Windows Programları" paketini kurun
+          (\`axpkg install wta\`); sonra .exe/.msi dosyasına çift tıklayın. Wine 11 ile 32 ve 64 bit programlar çalışır.
+
+          **Masaüstü:** sağ tıkla yeni klasör, belge, Axs programı; simgeleri sürükle; Çöp Kutusu.
+          **Kolay arayüz:** Axs'te \`use arayuz\` ile birkaç satırda pencereli program (\`/usr/lib/axs/docs/arayuz.md\`).
 
           **Kalıcı depolama:** sanal makineye boş bir disk ekleyin (ör. \`qemu-img create -f qcow2 veri.qcow2 20G\`,
           QEMU'ya \`-drive file=veri.qcow2,if=virtio\`); AxsOS ilk açılışta Ayarlar > Depolama'dan tek tıkla
@@ -140,7 +149,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete son-surum --yes --cleanup-tag 2>/dev/null || true
-          EK=""; for f in firefox-masaustu.png firefox.png chrome.png; do [ -f "build/out/$f" ] && EK="$EK build/out/$f"; done
+          EK=""; for f in firefox-masaustu.png wta-masaustu.png firefox.png chrome.png; do [ -f "build/out/$f" ] && EK="$EK build/out/$f"; done
           gh release create son-surum build/out/axsos.iso build/out/SHA256SUMS build/out/ekran.png $EK \
             --title "AxsOS son sürüm (${{ steps.info.outputs.short }})" \
             --notes-file build/out/NOTLAR.md --prerelease --target "$GITHUB_SHA"

@@ -542,7 +542,6 @@ static void m_draw(Win *w, Surf *s)
 
 static void m_init(Win *w, const char *arg)
 {
-    (void)arg;
     MarketSt *st = calloc(1, sizeof *st);
     st->ui.cur_hot = -1;
     st->job.fd = -1;
@@ -552,6 +551,13 @@ static void m_init(Win *w, const char *arg)
     w->min_h = 480;
     setenv("AXPKG_PROGRESS", "1", 1); /* axpkg/curl indirme ilerlemesini yazsın */
     reload(st);
+    if (arg && *arg) {   /* belirli bir paket: ayrıntı sayfası (yoksa aramaya yaz) */
+        for (int i = 0; i < st->n; i++)
+            if (!strcmp(st->pk[i].name, arg))
+                st->detail = i;
+        if (st->detail < 0)
+            tf_set(&st->q, arg);
+    }
     /* Uzak depo dizini yoksa ya da 6 saatten eskiyse ve ağ varsa arka planda yenile */
     struct stat sb;
     int stale = stat(REMOTE "/0.INDEX", &sb) != 0 || time(NULL) - sb.st_mtime > 6 * 3600;

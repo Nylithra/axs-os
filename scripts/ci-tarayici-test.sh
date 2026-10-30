@@ -2,6 +2,7 @@
 # Tarayıcı uçtan uca testi (CI): ISO'yu QEMU'da açar; AxsOS, build/uzak-depo'daki paketleri
 # (ağ kartı -> QEMU NAT -> 10.0.2.2) indirir, Firefox'u mozilla.org'dan ve Chrome'u
 # google.com'dan gerçekten kurar ve ikisiyle de https://example.com ekran görüntüsü alır.
+# WTA: Wine'ı GitHub'dan kurar, 32 ve 64 bit Windows test programlarını (mingw) çalıştırır.
 # Çıktılar: build/out/tarayici-seri.log, build/out/firefox.png, build/out/chrome.png
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -12,6 +13,11 @@ PORT="${PORT:-8765}"
 WEB="$B/ci-web"
 rm -rf "$WEB" && mkdir -p "$WEB"
 cp -l "$B"/uzak-depo/* "$WEB/" 2>/dev/null || cp "$B"/uzak-depo/* "$WEB/"
+# Windows test programları (mingw varsa)
+for a in x86_64:64 i686:32; do
+    cc="${a%%:*}-w64-mingw32-gcc"
+    command -v "$cc" >/dev/null && "$cc" -O2 -o "$WEB/merhaba${a#*:}.exe" tests/wta/merhaba.c
+done
 
 cat > "$WEB/test.sh" <<'EOT'
 #!/bin/sh
@@ -31,6 +37,12 @@ axpkg install google-chrome && echo CHROME-KURULDU
 /usr/lib/tarayici/tarayici-baslat --basliksiz chrome --headless=new --window-size=1280,800 \
     --screenshot=/home/axs/İndirilenler/chrome.png https://example.com
 [ -s /root/İndirilenler/chrome.png ] && echo "CHROME-EKRAN-TAMAM" && yukle /root/İndirilenler/chrome.png
+axpkg install wta && echo WTA-KURULDU
+wta surum
+for b in 64 32; do
+    curl -fs -o /root/İndirilenler/merhaba$b.exe "$H/merhaba$b.exe" && wta --basliksiz /root/İndirilenler/merhaba$b.exe
+done
+wta --basliksiz cmd /c echo WTA-CMD-TAMAM
 free -m
 echo TARAYICI-TEST-BITTI
 EOT
@@ -50,7 +62,7 @@ WEBPID=$!
 LOG="$OUT/tarayici-seri.log"
 FIFO="$(mktemp -u)"; mkfifo "$FIFO"
 trap 'kill $WEBPID 2>/dev/null; rm -f "$FIFO"; pkill -f "^qemu-system-x86_64.*axsos.iso" 2>/dev/null || true' EXIT
-if [ -w /dev/kvm ]; then BOOT=40; LIMIT=1200; else BOOT=100; LIMIT=3600; fi
+if [ -w /dev/kvm ]; then BOOT=40; LIMIT=1800; else BOOT=100; LIMIT=4800; fi
 MEM="${MEM:-4G}" TIMEOUT=$((LIMIT + BOOT + 60)) ./run.sh iso < "$FIFO" > "$LOG" 2>&1 &
 exec 3>"$FIFO"
 sleep "$BOOT"
@@ -71,6 +83,14 @@ if grep -q "FIREFOX-EKRAN-TAMAM" "$LOG"; then
         key:ret wait:240 "shot:$OUT/firefox-masaustu.png" >/dev/null 2>&1 || echo "[test] (masaüstü görüntüsü alınamadı)"
 fi
 
+# Masaüstünde WTA: Windows Not Defteri (AxsDE penceresinde) — bilgi amaçlı
+if grep -q "WTA-CMD-TAMAM" "$LOG"; then
+    echo "[test] masaüstünde WTA ekran görüntüsü alınıyor..."
+    GW=$([ -w /dev/kvm ] && echo 45 || echo 120)
+    MEM="${MEM:-4G}" timeout 600 scripts/qemu-gui.py --iso "wait:$GW" click:1210,17 key:ctrl-alt-t wait:3 \
+        "type:wta notepad" key:ret wait:60 "shot:$OUT/wta-masaustu.png" >/dev/null 2>&1 || echo "[test] (WTA görüntüsü alınamadı)"
+fi
+
 # Yeniden başlat: Firefox kalıcı depolamada duruyor ve hâlâ açılıyor mu
 if grep -q "FIREFOX-EKRAN-TAMAM" "$LOG"; then
     RUN_MODE=iso BOOT_WAIT=$KB CMD_WAIT=40 scripts/qemu-test.sh \
@@ -79,10 +99,16 @@ if grep -q "FIREFOX-EKRAN-TAMAM" "$LOG"; then
         'poweroff' >> "$LOG" 2>&1 || true
 fi
 
-sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' "$LOG" | grep -E "FIREFOX|CHROME|TARAYICI|HATA|kuruldu|sha256|tamam|BAŞARISIZ" || true
+sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' "$LOG" | grep -E "FIREFOX|CHROME|TARAYICI|WTA|wine-|HATA|kuruldu|sha256|tamam|BAŞARISIZ" || true
 ok=1
 grep -q "FIREFOX-EKRAN-TAMAM" "$LOG" && echo "[test] tamam: Firefox kuruldu ve sayfa açtı" || { echo "[test] BAŞARISIZ: Firefox"; ok=0; }
 grep -q "CHROME-EKRAN-TAMAM" "$LOG" && echo "[test] tamam: Chrome kuruldu ve sayfa açtı" || { echo "[test] BAŞARISIZ: Chrome"; ok=0; }
 grep -q "FIREFOX-KALICI-TAMAM" "$LOG" && echo "[test] tamam: Firefox yeniden başlatınca kurulu kaldı ve açıldı" || { echo "[test] BAŞARISIZ: Firefox kalıcı değil"; ok=0; }
+grep -q "WTA-CMD-TAMAM" "$LOG" && echo "[test] tamam: WTA (Wine) kuruldu, Windows komut istemi çalıştı" || { echo "[test] BAŞARISIZ: WTA"; ok=0; }
+if [ -f "$WEB/merhaba32.exe" ]; then
+    for b in 64 32; do
+        grep -q "WTA-$b-BIT-TAMAM" "$LOG" && echo "[test] tamam: $b bit Windows programı çalıştı" || { echo "[test] BAŞARISIZ: WTA $b bit"; ok=0; }
+    done
+fi
 [ $ok = 1 ] || { tail -60 "$LOG"; exit 1; }
 rm -f "$KD"

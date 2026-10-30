@@ -27,7 +27,7 @@ Tek komutla derlenir; QEMU'da ve BIOS/UEFI ile açılan bir ISO olarak çalış�
 |---|---|
 | `./build.sh` | Her şeyi sırayla derler (indirme dahil). İlk derleme ~8 dk (4 çekirdek), sonrakiler artımlı (~25 sn). |
 | `./build.sh <aşama>` | Tek aşama: `kernel busybox init axsh python axs shell axsde apps axpkg initramfs iso` |
-| `sudo ./build.sh tarayici` | Uzak depo paketleri: `tarayici-ortami` (Ubuntu kütüphaneleri + Xvfb + xkopru), `firefox`, `google-chrome` → `build/uzak-depo/` (debootstrap + root ister; `./build.sh`'e dahil değil, CI yapar). |
+| `sudo ./build.sh tarayici` | Uzak depo paketleri: `tarayici-ortami` (Ubuntu kütüphaneleri + Xvfb + xkopru), `firefox`, `google-chrome`, `wta` → `build/uzak-depo/` (debootstrap + root ister; `./build.sh`'e dahil değil, CI yapar). |
 | `./build.sh deps` | Eksik derleme paketlerini kurar (sudo apt-get). |
 | `AXSOS_BUILD=/yol ./build.sh` | Derleme klasörünü değiştirir (`run.sh` de aynı değişkeni okur). |
 | `./build.sh clean` | `build/` çıktılarını siler, `build/downloads/` korunur. |
@@ -42,7 +42,7 @@ Tek komutla derlenir; QEMU'da ve BIOS/UEFI ile açılan bir ISO olarak çalış�
 | `APPEND="..." ./run.sh` / `MEM=4G ./run.sh` | Ek kernel parametresi / bellek (varsayılan metin 512M, masaüstü 2G; tarayıcı için 3-4G). |
 | `scripts/qemu-test.sh "cmd1" "cmd2"` | Otomatik test (metin): açar, komutları yazar, çıktıyı gösterir. `RUN_MODE=iso`, `BOOT_WAIT=20`, `CMD_WAIT=3` |
 | `scripts/ci-test.sh` | ISO açılış testi: metin kipinde axs/python/axpkg/poweroff ve masaüstü ekran görüntüsü (CI da bunu çalıştırır). |
-| `scripts/ci-tarayici-test.sh` | Tarayıcı testi: `build/uzak-depo`'yu sunar, ISO'da Firefox/Chrome'u resmi kaynaklardan kurup `https://example.com` ekran görüntüsü alır (internet gerekir; CI çalıştırır). |
+| `scripts/ci-tarayici-test.sh` | Tarayıcı testi: `build/uzak-depo`'yu sunar, ISO'da Firefox/Chrome'u resmi kaynaklardan kurup `https://example.com` ekran görüntüsü alır; WTA ile 32/64 bit .exe çalıştırır (mingw; internet gerekir; CI çalıştırır). |
 | `axsde --bench` | Görüntüsüz performans ölçümü (sürükleme, yazma, boyutlandırma, tam çizim, başlatıcı; ms/kare). Host'ta: `AXSDE_FONTS=build/fonts`, `AXSDE_BENCH_SHOT=a.ppm`. |
 | `scripts/qemu-gui.py wait:32 click:454,753 shot:/tmp/a.png` | Otomatik test (masaüstü): görüntüsüz QEMU + QMP; `click/dbl/drag/move/wheel/key/type/shot/wait`. `--iso` ile ISO'dan. Ekran 1280x800. |
 
@@ -74,8 +74,13 @@ axsde/adp.h               AxsDE uygulama protokolü (soket mesajları)
 axsde/client/             libaxsapp: dış grafik uygulamaların kütüphanesi (axsapp.h)
 apps/<ad>/                Market uygulamaları: main.c + app.conf (paket bilgisi)
 apps/mkicon.c             Derlemede simge (128px PNG) ve örnek resim üretici (host'ta çalışır)
-apps/xkopru/              X uygulamalarını (Firefox/Chrome) AxsDE penceresinde gösteren köprü
-tarayici/                 Tarayıcı paketleri: tarayici-baslat (chroot + Xvfb + xkopru), firefox/, google-chrome/
+apps/xkopru/              X uygulamalarını (Firefox/Chrome/Wine) AxsDE penceresinde gösteren köprü
+apps/arayuz/              Kolay arayüz sunucusu: stdin komutlarıyla pencere kurar (/usr/bin/arayuz, sistemin parçası)
+axs-ek/                   Axs ekleri: axsarayuz.py ("use arayuz"), arayuz.md belgesi, ornekler/ (build-axs kurar)
+axsde/desktop.c, fileops.c  Masaüstü simgeleri (~/Masaüstü) ve ortak dosya işlemleri (yeni, ad, çöp, pano)
+tarayici/                 Uzak depo paketleri: tarayici-baslat (chroot + Xvfb + xkopru), firefox/, google-chrome/,
+                          wta/ (Windows programları: Wine)
+tests/wta/merhaba.c       WTA CI testi (mingw ile 32/64 bit .exe)
 scripts/repo-index.sh     Depo INDEX'i üretir (MANIFEST + sha256 + boyut + komutlar + simgeler)
 scripts/ci-tarayici-test.sh, ci-web.py   Tarayıcı uçtan uca testi ve test HTTP sunucusu
 rootfs/sbin/ag            Ağ yöneticisi (DHCP, durum, test, sabit adres)
@@ -177,6 +182,19 @@ build/                    (git'e girmez)
     Spotlight benzeri başlatıcı (Super / Ctrl+Boşluk; `> komut` terminalde çalıştırır),
     sağ tık menüsü, bildirimler, 5 duvar kâğıdı, 6 vurgu rengi.
   - Pencereler: sürükle, sağ-alt köşeden boyutlandır, çift tıkla büyüt, küçült, Alt+Tab, Alt+F4.
+  - **Masaüstü** (`desktop.c`): `~/Masaüstü` içeriği simge ızgarası (sütun sütun; konumlar
+    `~/.config/axsde-masaustu`). Çift tık açar, sürükle-bırak (klasöre / Çöp Kutusu'na), resim
+    önizlemesi, `.kisayol` (uygulama=<kimlik>) kısayolları, Wine'ın `.desktop` kısayolları. Sağ tık:
+    yeni klasör / metin / Axs programı / pencereli program, yapıştır, terminal; simgede aç, düzenle,
+    yeniden adlandır (F2), kopyala/kes (Ctrl+C/X/V), çöpe taşı (Delete). Çöp Kutusu `~/.cop`
+    (`.bilgi/` asıl yollar; Dosyalar'da geri yükle). Başlatıcıda sağ tık "Masaüstüne ekle".
+    Dosyalar da aynı işlemleri (`fileops.c`) sağ tık ve "+ Yeni" menüsünde sunar.
+    `wm_menu()` (geri çağırmalı menü) ve `wm_prompt()` (ad isteyen / onay kutusu) uygulamalara açık.
+  - **Kolay arayüz** (`use arayuz`, `axs-ek/`): Axs programı `/usr/bin/arayuz`'u başlatıp TAB ayrımlı
+    satırlarla öğe ekler (`ekle dugme d1 - Kaydet birincil`), olaylar (`tik d1`, `degisti`, `gonder`,
+    `kapandi`) stdout'tan gelir. Öğeler: baslik, yazi, dugme, giris/parola, onay, secenek, liste,
+    kaydirici, ilerleme, resim, ayrac, bosluk, satir, kutu; `p.her/sonra` zamanlayıcı;
+    `arayuz.mesaj/sor/onayla/komut`. Axs'in `DIS_KUTUPHANELER`'ine build-axs.sh ekler.
   - Uygulamalar: Terminal (pty + axsh, xterm alt kümesi, 256/24 bit renk, geri kaydırma),
     Dosyalar, **Axs Stüdyo** (Axs sözdizimi renklendirme, otomatik girinti, F5 ile çalıştır,
     çıktı paneli), **Uygulama Marketi**, Sistem İzleyici, Ayarlar, Hoş Geldin.
@@ -194,6 +212,16 @@ build/                    (git'e girmez)
     1000) kullanıcısıyla (kendi korumalı alanıyla), `xkopru` pencere; pencere kapanınca tarayıcı
     kapanır. `xkopru` ekran belleğini (XWD) eşleyip yalnızca değişen satırları gönderir,
     klavye/fareyi ham X11 protokolüyle XTEST'e iletir (Xlib yok). `--basliksiz` ile ekransız.
+  - **WTA — Windows To AxsOS** (`tarayici/wta`, uzak depo, `axpkg install wta`): Wine 11
+    (Kron4ek/Wine-Builds "amd64-wow64": 32+64 bit, 32 bit Linux kütüphanesi gerekmez) kurulurken
+    GitHub'dan `/opt/tarayici/opt/wine`'a iner. `wta <dosya.exe|msi|bat|lnk>`: chroot'ta root olarak,
+    `/root` → chroot `/axsos` bağlanır (WINEPREFIX `~/.wine`), Xvfb `:5` + xkopru "Windows (WTA)"
+    penceresi, tüm programlar tek sanal Windows masaüstünde (Explorer\Desktops). İlk çalıştırmada
+    `wineboot -i` (Mono/Gecko sorulmaz; `wta bilesenler`), ilerleme penceresi `arayuz` ile.
+    Wine'ın menü kayıtları (`~/.local/share/applications/wine`) → `/usr/share/axsde/apps/wta-*.app`
+    (başlatıcıda görünür). `wta` (merkez: `/usr/lib/wta/merkez.axs`, kolay arayüzle), `ayarlar`,
+    `gezgin`, `kaldir`, `liste`, `kapat`, `sifirla --evet`, `surum`, `--basliksiz` (CI). `.exe`
+    WTA yokken açılırsa Market'te WTA sayfası açılır. Çekirdek sürücüsü/3B isteyen programlar çalışmaz.
   - **Market uygulamaları** (ayrı süreçler, `apps/`): Hesap Makinesi, Saat (kronometre,
     zamanlayıcı), Takvim (tatiller, notlar), Resim Görüntüleyici (+ örnek resimler), Çizim
     (PNG kaydı `~/Resimler`), Yılan, 2048, Mayın Tarlası. Terminal paketleri (`pkgs/`) de
@@ -242,7 +270,8 @@ JetBrains/JetBrainsMono, novnc/noVNC). Yazı tipleri seyrek klonla tek dosya ola
 
 - Aşamalar: 1) kernel 2) BusyBox + initramfs 3) C init 4) axsh 5) axs dili
   6) axpkg 7) bootable ISO 8) AxsDE masaüstü 9) Uygulama Marketi + uygulamalar
-  10) bash + gerçek ağ + uzak depo + Firefox/Chrome 11) kalıcı depolama. Hepsi tamamlandı.
+  10) bash + gerçek ağ + uzak depo + Firefox/Chrome 11) kalıcı depolama 12) masaüstü dosyaları,
+  kolay arayüz (`use arayuz`), WTA (Windows programları). Hepsi tamamlandı.
 - Masaüstü değişikliklerini `scripts/qemu-gui.py` ile ekran görüntüsü alarak doğrula.
 - Her değişiklikten sonra QEMU'da test et (`scripts/qemu-test.sh`), git commit at.
 - Her şey `./build.sh` ve `./run.sh` ile yeniden üretilebilir kalmalı; elle adım yok.

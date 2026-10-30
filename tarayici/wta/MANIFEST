@@ -1,0 +1,10 @@
+name=wta
+title=WTA — Windows Programları
+version=1.0
+category=Sistem
+depends=tarayici-ortami
+extra_size=75000000
+min_ram=2048
+app=wta
+description=Windows To AxsOS: .exe ve .msi programlarını AxsOS'ta çalıştır (Wine 11)
+about=WTA, Windows programlarını AxsOS masaüstünde çalıştırır. Arkasında Windows API'sinin açık kaynak uygulaması Wine 11 vardır (kurulurken GitHub'daki Kron4ek/Wine-Builds sürümünden indirilir, ~75 MB; 64 ve 32 bit programlar). Bir .exe ya da .msi dosyasına çift tıklaman yeterli: program Windows benzeri bir masaüstünde (görev çubuğu, başlat menüsü) açılır, kurduğun programlar AxsOS başlatıcısında da görünür. C: sürücüsü ~/.wine/drive_c; Masaüstü ve İndirilenler AxsOS'takilerle aynıdır. Çoğu masaüstü programı ve eski oyun çalışır; çekirdek sürücüsü isteyen programlar (kopya korumaları, hile önleyiciler, bazı VPN'ler) ve 3B hızlandırma isteyen yeni oyunlar çalışmaz. Kalıcı depolama açıkken kurduğun programlar yeniden başlatınca korunur.

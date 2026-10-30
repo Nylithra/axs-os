@@ -1594,6 +1594,21 @@ void wm_open_file(const char *path)
         app_launch(ae, path);
         return;
     }
+    static const char *win_ext[] = { ".exe", ".msi", ".bat", ".lnk", ".com", ".EXE", ".MSI", NULL };
+    for (int i = 0; win_ext[i]; i++)
+        if (ends_with(path, win_ext[i])) {
+            wm_notify("Windows programı", "Çalıştırmak için WTA gerekli: Uygulama Marketi'nden kur", IC_PACKAGES);
+            wm_open(&APP_PACKAGES, "wta");
+            return;
+        }
+    if (ends_with(path, ".desktop")) {   /* Windows programı kısayolu (WTA/Wine) */
+        char buf[4096];
+        if (read_file(path, buf, sizeof buf) > 0 && strstr(buf, "wine") && access("/usr/bin/wta", X_OK) == 0) {
+            char *argv[] = { "/usr/bin/wta", "--menu", (char *)path, NULL };
+            spawn_detached(argv);
+            return;
+        }
+    }
     static const char *img_ext[] = { ".png", ".jpg", ".jpeg", ".bmp", ".gif", NULL };
     for (int i = 0; img_ext[i]; i++)
         if (ends_with(path, img_ext[i])) {

@@ -89,6 +89,13 @@ if arayuz.onayla("Silinsin mi?")               # true / false
 end
 ```
 
+## Komut çalıştırmak
+
+```axs
+arayuz.komut("wta notepad")                 # arka planda başlat (pencere donmaz)
+cikti = arayuz.komut("uname -r", true)      # bitmesini bekle, çıktısını al
+```
+
 ## Nasıl çalışır?
 
 `use arayuz`, `/usr/bin/arayuz` programını başlatır ve ona satır satır komut yollar

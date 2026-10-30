@@ -16,7 +16,7 @@ bagla() {
     mkdir -p "$R$1" && mount -o bind "$1" "$R$1"
 }
 coz() {
-    for m in /home/axs/İndirilenler /tmp /dev/shm /dev/pts /dev /sys /proc; do
+    for m in /axsos /home/axs/İndirilenler /tmp /dev/shm /dev/pts /dev /sys /proc; do
         bagli "$R$m" && umount -l "$R$m" 2>/dev/null
     done
 }
@@ -24,6 +24,7 @@ coz() {
 if [ "$1" = --kapat-hepsi ]; then
     pkill -f '^/opt/firefox/' 2>/dev/null
     pkill -f '^/opt/google/chrome/' 2>/dev/null
+    [ -x /usr/bin/wta ] && /usr/bin/wta kapat >/dev/null 2>&1
     pkill -f 'Xvfb :[0-9]' 2>/dev/null
     pkill xkopru 2>/dev/null
     sleep 1

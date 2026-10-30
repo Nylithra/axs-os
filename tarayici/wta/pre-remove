@@ -1,0 +1,6 @@
+#!/bin/sh
+# Windows programlarını kapat, Wine'ı sil. C: sürücüsü (~/.wine) kullanıcı verisidir: korunur.
+[ -x /opt/tarayici/opt/wine/bin/wineserver ] && /usr/bin/wta kapat >/dev/null 2>&1
+rm -rf /opt/tarayici/opt/wine /var/lib/wta
+rm -f /usr/share/axsde/apps/wta-*.app
+exit 0

@@ -35,6 +35,8 @@ typedef struct {
     char label[256];          /* görünen ad */
     int dir, exec, img;
     char app[64];             /* kısayolsa uygulama kimliği */
+    char icon[320];           /* .desktop (Windows programı kısayolu) simgesi */
+    int deskfile;
     int col, row, placed;
 } DItem;
 
@@ -157,6 +159,36 @@ static int item_cmp(const void *a, const void *b)
     return strcasecmp(x->label, y->label);
 }
 
+/* Wine'ın masaüstüne koyduğu .desktop: Name= ve Icon= (PNG ~/.local/share/icons altında) */
+static void read_desktop(const char *path, DItem *x)
+{
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return;
+    char line[512], ic[256] = "";
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (!strncmp(line, "Name=", 5))
+            snprintf(x->label, sizeof x->label, "%s", line + 5);
+        else if (!strncmp(line, "Icon=", 5))
+            snprintf(ic, sizeof ic, "%s", line + 5);
+    }
+    fclose(f);
+    x->deskfile = 1;
+    if (ic[0] == '/') {
+        snprintf(x->icon, sizeof x->icon, "%s", ic);
+        return;
+    }
+    static const char *sizes[] = { "256x256", "128x128", "64x64", "48x48", "32x32" };
+    const char *home = getenv("HOME") ? getenv("HOME") : "/root";
+    for (int i = 0; ic[0] && i < 5; i++) {
+        snprintf(x->icon, sizeof x->icon, "%s/.local/share/icons/hicolor/%s/apps/%s.png", home, sizes[i], ic);
+        if (access(x->icon, R_OK) == 0)
+            return;
+    }
+    x->icon[0] = 0;
+}
+
 static void scan(void)
 {
     char keep[256] = "";
@@ -192,10 +224,25 @@ static void scan(void)
             read_shortcut(full, x->app, sizeof x->app);
             x->label[strlen(x->label) - 8] = 0;
         }
+        if (!x->dir && ends_ci(x->name, ".desktop"))
+            read_desktop(full, x);
         nitems++;
     }
     if (d)
         closedir(d);
+    /* Windows kısayolu: "X.lnk" yanında Wine'ın "X.desktop"u varsa yalnızca biri görünsün */
+    for (int i = 1; i < nitems; i++) {
+        if (!ends_ci(items[i].name, ".lnk"))
+            continue;
+        char d[300];
+        snprintf(d, sizeof d, "%.*s.desktop", (int)strlen(items[i].name) - 4, items[i].name);
+        for (int k = 1; k < nitems; k++)
+            if (!strcmp(items[k].name, d)) {
+                items[i] = items[--nitems];
+                i--;
+                break;
+            }
+    }
     qsort(items + 1, nitems - 1, sizeof(DItem), item_cmp);
     /* kayıtlı konumlar */
     char p[PATH_MAX];
@@ -387,6 +434,14 @@ static void draw_item_icon(Surf *s, int i, int x, int y)
         draw_line(s, x + 4.5f, y + ICON - 4.5f, x + 11, y + ICON - 11, 2, HEX(0x1C1C2C));
         draw_line(s, x + 6.5f, y + ICON - 11, x + 11, y + ICON - 11, 2, HEX(0x1C1C2C));
         draw_line(s, x + 11, y + ICON - 11, x + 11, y + ICON - 6.5f, 2, HEX(0x1C1C2C));
+        return;
+    }
+    if (it->deskfile) {
+        const Surf *ic = it->icon[0] ? icon_png(it->icon, ICON) : NULL;
+        if (ic)
+            blit_alpha(s, x + (ICON - ic->w) / 2, y + (ICON - ic->h) / 2, ic);
+        else
+            draw_icon(s, IC_EXEC, x, y, ICON);
         return;
     }
     if (it->img) {

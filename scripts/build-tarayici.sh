@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tarayıcı paketleri (uzak depo için): tarayici-ortami, firefox, google-chrome.
+# Tarayıcı paketleri (uzak depo için): tarayici-ortami, firefox, google-chrome, wta (Windows programları).
 #
 # Firefox ve Chrome glibc + GTK + X11 ister; AxsOS ise musl ile statik ve X'siz. Bu yüzden
 # tarayıcılar /opt/tarayici altındaki küçük bir Ubuntu kök dosya sisteminde (chroot) çalışır:
@@ -32,6 +32,9 @@ PKGS=(
     xdg-utils ca-certificates
     # kurulum sırasında tarayıcı arşivlerini açmak için
     xz-utils bzip2
+    # WTA (Wine): Windows programları için X/yazı tipi/TLS kütüphaneleri
+    libfreetype6 libfontconfig1 libgnutls30t64 libxi6 libxcursor1 libxinerama1 libxxf86vm1
+    libxrender1 libxext6 libxfixes3 libunwind8 libpcsclite1 cabextract unzip
 )
 
 if [ ! -f "$R/.tamam-$TARAYICI_UBUNTU-$TARAYICI_ORTAM_VER" ]; then
@@ -88,6 +91,9 @@ O="$P/tarayici-ortami"
 mkdir -p "$O/files/opt" "$O/files/usr/bin" "$O/files/usr/lib/tarayici"
 cp -a "$R" "$O/files/opt/tarayici"
 rm -f "$O/files/opt/tarayici/.tamam-"*
+# chroot'un /root'u boş kalmalı: WTA oraya AxsOS ev dizinini bağlar (paket güncellemesi
+# kullanıcının dosyalarına dokunmasın)
+find "$O/files/opt/tarayici/root" -mindepth 1 -delete
 install -m755 "$BUILD/apps/xkopru" "$O/files/usr/bin/xkopru"
 install -m755 "$ROOT/tarayici/tarayici-baslat" "$O/files/usr/lib/tarayici/tarayici-baslat"
 cat > "$O/MANIFEST" <<EOM
@@ -105,11 +111,12 @@ cat > "$O/pre-remove" <<'EOM'
 exit 0
 EOM
 
-# firefox / google-chrome kurulum paketleri
-mkdir -p "$P/firefox" "$P/google-chrome"
-cp -a "$ROOT/tarayici/firefox/." "$P/firefox/"
-cp -a "$ROOT/tarayici/google-chrome/." "$P/google-chrome/"
-for n in firefox google-chrome; do
+# firefox / google-chrome / wta kurulum paketleri
+for n in firefox google-chrome wta; do
+    mkdir -p "$P/$n"
+    cp -a "$ROOT/tarayici/$n/." "$P/$n/"
+done
+for n in firefox google-chrome wta; do
     install -D -m644 "$BUILD/icons/$n.png" "$P/$n/files/usr/share/axsde/icons/$n.png"
 done
 

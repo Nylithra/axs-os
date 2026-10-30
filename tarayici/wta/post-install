@@ -1,0 +1,57 @@
+#!/bin/sh
+# Wine'ı (Kron4ek/Wine-Builds, "wow64": 32 ve 64 bit Windows programları, 32 bit Linux
+# kütüphanesi gerektirmez) GitHub'dan indirip /opt/tarayici/opt/wine'a kurar.
+set -o pipefail
+R=/opt/tarayici
+SURUM="${WTA_WINE_SURUM:-11.0}"
+DEPO=https://github.com/Kron4ek/Wine-Builds
+URL="${WTA_WINE_URL:-$DEPO/releases/download/$SURUM/wine-$SURUM-amd64-wow64.tar.xz}"
+YENI="$R/opt/.wine-yeni"
+GEREKEN=900   # MB: açılmış Wine ~500 MB + ilk C: sürücüsü
+
+bos=$(stat -f -c '%a %S' / | awk '{print int($1 * $2 / 1048576)}')
+if [ "${bos:-0}" -lt $GEREKEN ]; then
+    echo "HATA: yer yetersiz: WTA için ~$GEREKEN MB boş yer gerekli, şu an ${bos} MB boş." >&2
+    echo "HATA: Kalıcı depolamayı açın (Ayarlar > Depolama) ya da sanal makineye en az 4 GB bellek verin." >&2
+    exit 1
+fi
+
+echo "Wine $SURUM indiriliyor (github.com/Kron4ek/Wine-Builds)..."
+rm -rf "$YENI" && mkdir -p "$YENI"
+curl -fL --retry 3 --connect-timeout 20 ${AXPKG_PROGRESS:+--progress-bar} "$URL" | chroot "$R" tar -xJf - -C /opt/.wine-yeni
+rc=$?
+if [ $rc != 0 ] && [ -z "${WTA_WINE_URL:-}" ]; then
+    # dosya adı değişmiş olabilir: sürümdeki "amd64-wow64" arşivini sor
+    U2=$(curl -fsL --connect-timeout 20 "https://api.github.com/repos/Kron4ek/Wine-Builds/releases/tags/$SURUM" \
+        | grep -o '"browser_download_url": *"[^"]*amd64-wow64[^"]*\.tar\.xz"' | grep -v staging | head -1 | sed 's/.*"\(https[^"]*\)"/\1/')
+    if [ -n "$U2" ]; then
+        echo "Yeniden deneniyor: $U2"
+        rm -rf "$YENI" && mkdir -p "$YENI"
+        curl -fL --retry 3 ${AXPKG_PROGRESS:+--progress-bar} "$U2" | chroot "$R" tar -xJf - -C /opt/.wine-yeni
+        rc=$?
+    fi
+fi
+KOK=$(ls -d "$YENI"/*/bin/wine 2>/dev/null | head -1)
+if [ $rc != 0 ] || [ -z "$KOK" ]; then
+    bos=$(stat -f -c '%a %S' / | awk '{print int($1 * $2 / 1048576)}')
+    if [ "${bos:-0}" -lt 20 ]; then
+        echo "HATA: açarken yer doldu. Kalıcı depolamayı açın ya da daha çok bellek verin." >&2
+    else
+        echo "HATA: Wine indirilemedi ya da açılamadı (kod $rc). İnternet bağlantısını denetleyin: ag test" >&2
+    fi
+    rm -rf "$YENI"
+    exit 1
+fi
+KOK=${KOK%/bin/wine}
+rm -rf "$R/opt/wine"
+mv "$KOK" "$R/opt/wine"
+rm -rf "$YENI"
+# sürüm denetimi: Wine chroot'taki kütüphanelerle gerçekten çalışıyor mu
+for m in proc dev; do grep -q " $R/$m " /proc/mounts || mount -o bind /$m "$R/$m"; done
+V=$(chroot "$R" /opt/wine/bin/wine --version 2>&1 | head -1)
+case "$V" in
+    wine-*) ;;
+    *) echo "HATA: Wine çalışmadı: $V" >&2; rm -rf "$R/opt/wine"; exit 1 ;;
+esac
+mkdir -p /var/lib/wta/kisayollar
+echo "$V kuruldu. Bir .exe/.msi dosyasına çift tıklayın ya da: wta program.exe"

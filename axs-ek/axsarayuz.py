@@ -507,7 +507,20 @@ def yukle(y):
         p.calistir()
         return sonuc["v"]
 
+    def komut(komut_metni, bekle=False):
+        """Kabuk komutu calistirir. bekle=false: arka planda baslatir (pencere donmaz);
+        bekle=true: bitmesini bekler ve ciktisini dondurur."""
+        k = _metin(komut_metni)
+        if not bekle:
+            subprocess.Popen(["/bin/sh", "-c", k], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+            return True
+        r = subprocess.run(["/bin/sh", "-c", k], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT)
+        return r.stdout.decode("utf-8", "replace").rstrip("\n")
+
     return isim_alani("arayuz", {
+        "komut": komut, "command": komut,
         "pencere": pencere, "window": pencere,
         "mesaj": mesaj, "message": mesaj,
         "sor": sor, "ask": sor,

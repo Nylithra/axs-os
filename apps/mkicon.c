@@ -200,6 +200,15 @@ static int draw_app_icon(Surf *s, const char *id, int sz)
             fill_rrect(s, r, P(.05), i ? ALPHA(W, 90 + (2 - i) * 60) : W);
         }
         fill_rect(s, (Rect){ P(.22), P(.30), P(.46), P(.03) }, HEX(0x334155));
+    } else if (!strcmp(id, "wta")) {
+        /* Windows To AxsOS: pencere çerçevesi + ".exe" */
+        squircle(s, sz, HEX(0x38BDF8), HEX(0x1D4ED8));
+        Rect win = { P(.17), P(.22), P(.66), P(.54) };
+        fill_rrect(s, win, P(.06), ALPHA(W, 235));
+        fill_rrect_corners(s, (Rect){ win.x, win.y, win.w, P(.12) }, P(.06), HEX(0x1E3A8A), 3);
+        for (int i = 0; i < 3; i++)
+            fill_circle(s, win.x + P(.07) + i * P(.06), win.y + P(.06), f * .018f, ALPHA(W, 200));
+        draw_text_center(s, F_UI_BOLD, P(.17), (Rect){ win.x, win.y + P(.14), win.w, P(.36) }, HEX(0x1D4ED8), ".exe");
     } else if (!strcmp(id, "axs-ornekler")) {
         squircle(s, sz, HEX(0xC084FC), HEX(0x5B21B6));
         draw_logo(s, f * .5f, f * .52f, f * .56f, W, HEX(0xE9D5FF));

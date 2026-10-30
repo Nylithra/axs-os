@@ -1,0 +1,277 @@
+#!/bin/sh
+# wta - Windows To AxsOS: Windows programlarını (.exe, .msi, .bat, .lnk) AxsOS'ta çalıştırır.
+#
+# Wine (Windows API'sinin açık kaynak uygulaması), /opt/tarayici'deki Ubuntu kütüphaneleriyle
+# chroot içinde çalışır. Ekran: Xvfb :5 + xkopru (AxsDE penceresi "Windows (WTA)"); tüm
+# Windows pencereleri bu pencerede, Windows benzeri bir masaüstünde (görev çubuğu, başlat
+# menüsü) açılır. Windows sürücüsü C: = ~/.wine/drive_c; Masaüstü, İndirilenler ve Resimler
+# AxsOS'takilerle aynı klasörlerdir. Kurulan programlar AxsDE başlatıcısında da görünür.
+# AxsOS ev dizini (/root) chroot'ta /axsos olarak görünür (hiçbir paketin dosyası orada değil).
+#
+#   wta <dosya.exe|msi|bat|lnk> [argüman...]   programı çalıştır / kur
+#   wta                    WTA merkezi (kurulu programlar, kur, ayarlar)
+#   wta ayarlar            Wine ayarları (winecfg)
+#   wta gezgin             Windows dosya gezgini
+#   wta kaldir             Program ekle/kaldır
+#   wta liste              kurulu Windows programları
+#   wta bilesenler         .NET (Wine Mono) ve HTML (Wine Gecko) bileşenlerini kur
+#   wta kapat              tüm Windows programlarını kapat
+#   wta sifirla --evet     Windows ortamını (C: sürücüsü, kurulu programlar) sil
+#   wta surum              Wine sürümü
+#   wta --basliksiz <komut> [argüman...]   ekransız çalıştır, çıktıyı terminale yaz (betikler, CI)
+R=/opt/tarayici
+WINE=/opt/wine/bin/wine
+D=5
+EV=/axsos             # chroot içinde AxsOS'un /root'u
+PFX=$EV/.wine
+KILIT=/tmp/wta.pid
+KAYIT=/usr/share/axsde/apps
+KISAYOL=/var/lib/wta/kisayollar
+
+hata() { echo "wta: $*" >&2; exit 1; }
+bagli() { grep -q " $1 " /proc/mounts; }
+bagla() {
+    bagli "$R$1" && return 0
+    mkdir -p "$R$1" && mount -o bind "$1" "$R$1"
+}
+
+[ -x "$R$WINE" ] || {
+    if [ -d /var/lib/axpkg/db/wta ]; then
+        hata "WTA kurulu ama Wine eksik (indirme yarım kalmış olabilir). Yeniden kurmak için: axpkg install -f wta"
+    fi
+    hata "WTA kurulu değil. Kurmak için: axpkg install wta"
+}
+
+baglar() {
+    chmod 755 "$R" "$R/opt" "$R/usr" 2>/dev/null
+    bagla /proc && bagla /sys && bagla /dev && bagla /dev/pts && bagla /dev/shm && bagla /tmp \
+        || hata "dosya sistemleri bağlanamadı"
+    # AxsOS ev dizini chroot'ta /axsos: C: sürücüsü (~/.wine) ve belgeler aynı yerde
+    bagli "$R$EV" || { mkdir -p "$R$EV" && mount -o bind /root "$R$EV"; } || hata "/root bağlanamadı"
+    cp /etc/resolv.conf "$R/etc/resolv.conf" 2>/dev/null
+    cp /etc/hosts "$R/etc/hosts" 2>/dev/null
+    # Windows'un Masaüstü / İndirilenler / Resimler klasörleri = AxsOS'takiler
+    mkdir -p /root/Masaüstü /root/İndirilenler /root/Resimler /root/.config
+    [ -f /root/.config/user-dirs.dirs ] || cat > /root/.config/user-dirs.dirs <<'EOD'
+XDG_DESKTOP_DIR="$HOME/Masaüstü"
+XDG_DOWNLOAD_DIR="$HOME/İndirilenler"
+XDG_PICTURES_DIR="$HOME/Resimler"
+XDG_DOCUMENTS_DIR="$HOME"
+EOD
+}
+
+# ekran boyutu (AxsDE penceresine sığacak kadar), saat dilimi, klavye düzeni
+sw=1280; sh=800
+[ -r /sys/class/graphics/fb0/virtual_size ] && IFS=, read sw sh < /sys/class/graphics/fb0/virtual_size
+W=$(( (sw - 80) / 8 * 8 )); H=$(( sh - 160 ))
+[ $W -lt 640 ] && W=640; [ $H -lt 480 ] && H=480
+tz=$(sed -n 's/^tz=//p' /etc/axsde.conf 2>/dev/null); tz=${tz:-180}
+if [ "$tz" -ge 0 ]; then s=-; a=$tz; n=+; else s=; a=$(( -tz )); n=-; fi
+TZV=$(printf '<%s%02d%02d>%s%d:%02d' "$n" $((a / 60)) $((a % 60)) "$s" $((a / 60)) $((a % 60)))
+lay=$(sed -n 's/^layout=//p' /etc/axsde.conf 2>/dev/null)
+[ "${lay:-0}" = 1 ] && KB=us || KB=tr
+
+ENVV="HOME=$EV USER=root LOGNAME=root TZ=$TZV LANG=C.UTF-8 WINEPREFIX=$PFX WINEDEBUG=${WINEDEBUG:--all} \
+PATH=/opt/wine/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/tmp/xdg-root XDG_CONFIG_HOME=$EV/.config"
+
+wine_env() { # chroot içinde Wine aracını çalıştır: wine_env <DISPLAY> komut...
+    dsp=$1; shift
+    mkdir -p /tmp/xdg-root && chmod 700 /tmp/xdg-root
+    chroot "$R" env -i $ENVV DISPLAY="$dsp" ${WTA_OVERRIDE:+WINEDLLOVERRIDES=$WTA_OVERRIDE} "$@"
+}
+
+# İlk çalıştırma: Windows ortamını (C: sürücüsü) hazırla
+hazirla() {
+    [ -f /root/.wine/system.reg ] && return 0
+    echo "WTA: Windows ortamı ilk kez hazırlanıyor (C: sürücüsü, ~1-2 dakika)..."
+    rm -f /tmp/wta-hazir
+    if [ -S /run/axsde.sock ] && [ -x /usr/bin/arayuz ]; then
+        # masaüstünde ilerleme penceresi (kolay arayüz)
+        {
+            printf 'ac\tWTA\t440\t190\n'
+            printf 'ekle\tbaslik\tb\t-\tWindows ortamı hazırlanıyor\n'
+            printf 'ekle\tyazi\ty\t-\tİlk çalıştırmada C: sürücüsü kuruluyor; bu bir kez olur (1-2 dakika).\n'
+            printf 'ekle\tilerleme\ti\t-\t2\n'
+            n=2
+            while [ ! -f /tmp/wta-hazir ]; do
+                sleep 1; [ $n -lt 95 ] && n=$((n + 1)); printf 'ayarla\ti\tdeger\t%d\n' $n
+            done
+            printf 'ayarla\ti\tdeger\t100\n'; sleep 1; printf 'kapat\n'
+        } 2>/dev/null | AXSDE_APP_ID=wta /usr/bin/arayuz >/dev/null 2>&1 &
+    fi
+    # .NET/HTML bileşenleri ilk açılışta sorulmasın (sonra: wta bilesenler)
+    WTA_OVERRIDE="mscoree,mshtml=" wine_env "$1" /opt/wine/bin/wine wineboot -i >/tmp/wta-hazirla.log 2>&1
+    wine_env "$1" /opt/wine/bin/wineserver -w
+    # tüm programlar tek bir sanal Windows masaüstünde (görev çubuğu ve başlat menüsüyle)
+    for k in "HKCU\\Software\\Wine\\Explorer /v Desktop /d Default" \
+             "HKCU\\Software\\Wine\\Explorer\\Desktops /v Default /d ${W}x${H}"; do
+        # shellcheck disable=SC2086
+        wine_env "$1" /opt/wine/bin/wine reg add $k /f >/dev/null 2>&1
+    done
+    wine_env "$1" /opt/wine/bin/wineserver -w
+    touch /tmp/wta-hazir
+    [ -f /root/.wine/system.reg ] || { tail -20 /tmp/wta-hazirla.log >&2; hata "Windows ortamı hazırlanamadı (bkz. /tmp/wta-hazirla.log)"; }
+    echo "WTA: hazır."
+}
+
+# Wine'ın oluşturduğu menü kayıtlarından (.desktop) AxsDE başlatıcı kayıtları üret
+senkron() {
+    A=/root/.local/share/applications/wine
+    mkdir -p "$KISAYOL"
+    if [ -d "$A" ]; then
+        find "$A" -name '*.desktop' 2>/dev/null | while read -r f; do
+            ad=$(sed -n 's/^Name=//p' "$f" | head -1)
+            [ -n "$ad" ] || continue
+            case "$ad" in *[Uu]ninstall*|*[Kk]aldır*) continue ;; esac
+            kim="wta-$(printf '%s' "$f" | md5sum | cut -c1-10)"
+            ic=$(sed -n 's/^Icon=//p' "$f" | head -1)
+            icp=""
+            for s in 256x256 128x128 64x64 48x48 32x32; do
+                p="/root/.local/share/icons/hicolor/$s/apps/$ic.png"
+                [ -f "$p" ] && { icp=$p; break; }
+            done
+            [ -n "$icp" ] || icp=/usr/share/axsde/icons/wta.png
+            printf '#!/bin/sh\nexec /usr/bin/wta --menu %s\n' "'$f'" > "$KISAYOL/$kim"
+            chmod 755 "$KISAYOL/$kim"
+            printf 'name=%s\nexec=%s\nicon=%s\ncategory=Windows\ndesc=Windows programı (WTA)\n' \
+                "$ad" "$KISAYOL/$kim" "$icp" > "$KAYIT/$kim.app.yeni"
+            mv "$KAYIT/$kim.app.yeni" "$KAYIT/$kim.app"
+            echo "$kim" >> /tmp/wta-senkron.$$
+        done
+    fi
+    # kaldırılan programların kayıtlarını sil
+    for k in "$KAYIT"/wta-*.app; do
+        [ -e "$k" ] || continue
+        b=$(basename "$k" .app)
+        grep -qx "$b" /tmp/wta-senkron.$$ 2>/dev/null || { rm -f "$k" "$KISAYOL/$b"; }
+    done
+    rm -f /tmp/wta-senkron.$$
+}
+
+oturum_acik() { [ -f "$KILIT" ] && kill -0 "$(cat "$KILIT")" 2>/dev/null; }
+
+# Xvfb + xkopru penceresi + izleyici (arka planda); zaten açıksa bir şey yapmaz
+oturum() {
+    oturum_acik && return 0
+    rm -rf "/tmp/xvfb$D" "/tmp/.X11-unix/X$D" "/tmp/.X$D-lock"
+    mkdir -p "/tmp/xvfb$D" /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+    chroot "$R" Xvfb ":$D" -screen 0 "${W}x${H}x24" -fbdir "/tmp/xvfb$D" -nolisten tcp -ac -noreset \
+        >"/tmp/xvfb$D.log" 2>&1 &
+    XVFB=$!
+    i=0
+    while [ ! -S "/tmp/.X11-unix/X$D" ] && [ $i -lt 100 ]; do usleep 100000; i=$((i + 1)); done
+    [ -S "/tmp/.X11-unix/X$D" ] || hata "X sunucusu başlatılamadı (bkz. /tmp/xvfb$D.log)"
+    chroot "$R" env DISPLAY=":$D" setxkbmap "$KB" 2>/dev/null
+    AXSDE_APP_ID=wta /usr/bin/xkopru --display "$D" --fb "/tmp/xvfb$D/Xvfb_screen0" --title "Windows (WTA)" &
+    KOPRU=$!
+    # izleyici: pencere kapanınca Windows programlarını kapat; programlar bitince pencereyi kapat
+    (
+        yok=0; n=0
+        while :; do
+            sleep 2
+            if ! kill -0 $KOPRU 2>/dev/null; then
+                wine_env ":$D" /opt/wine/bin/wineserver -k 2>/dev/null
+                break
+            fi
+            if pgrep -f 'wineserver' >/dev/null; then yok=0; else yok=$((yok + 1)); fi
+            [ $yok -ge 3 ] && { kill $KOPRU 2>/dev/null; break; }
+            n=$((n + 1)); [ $((n % 5)) = 0 ] && senkron
+        done
+        senkron
+        kill $XVFB 2>/dev/null
+        rm -f "$KILIT"
+    ) >/dev/null 2>&1 &
+    echo $! > "$KILIT"
+}
+
+# AxsOS yolunu chroot içindeki yola çevir (/root/x -> /axsos/x; başka yerdeyse geçici kopya)
+yol() {
+    f=$(readlink -f "$1")
+    case "$f" in
+        /root) echo "$EV" ;;
+        /root/*) echo "$EV/${f#/root/}" ;;
+        /tmp/*) echo "$f" ;;
+        "$R"/*) echo "${f#$R}" ;;
+        *) mkdir -p /tmp/wta-dosya && cp -a "$f" /tmp/wta-dosya/ && echo "/tmp/wta-dosya/$(basename "$f")" ;;
+    esac
+}
+
+# Programı oturumda başlat (AxsOS yolu -> Windows; .exe/.msi/.bat/.lnk "start" ile)
+calistir() {
+    baglar
+    hazirla ""
+    oturum
+    if [ -e "$1" ]; then
+        f=$(yol "$1"); shift
+        dir=$(dirname "$f")
+        wine_env ":$D" sh -c 'cd "$1" 2>/dev/null; shift; exec "$@"' sh "$dir" \
+            /opt/wine/bin/wine start /unix "$f" "$@" >/tmp/wta.log 2>&1 &
+    else
+        wine_env ":$D" /opt/wine/bin/wine "$@" >/tmp/wta.log 2>&1 &
+    fi
+}
+
+case "${1:-}" in
+"")
+    if [ -S /run/axsde.sock ] && [ -x /usr/bin/axs ]; then
+        exec /usr/bin/axs /usr/lib/wta/merkez.axs
+    fi
+    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+-h|--help|yardim)
+    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+--basliksiz)
+    shift
+    baglar
+    hazirla ""
+    if [ -e "${1:-}" ]; then
+        f=$(yol "$1"); shift
+        set -- "$f" "$@"
+    fi
+    wine_env "" /opt/wine/bin/wine "$@"
+    rc=$?
+    wine_env "" /opt/wine/bin/wineserver -w
+    exit $rc ;;
+--menu)
+    # başlatıcıdaki kayıt: .desktop dosyasındaki Exec satırını çalıştır
+    f="$2"
+    [ -f "$f" ] || hata "kısayol bulunamadı: $2"
+    ex=$(sed -n 's/^Exec=//p' "$f" | head -1)
+    baglar; hazirla ""; oturum
+    wine_env ":$D" sh -c "$ex" >/tmp/wta.log 2>&1 &
+    exit 0 ;;
+ayarlar) calistir winecfg ;;
+gezgin) calistir explorer ;;
+kaldir) calistir uninstaller ;;
+bilesenler)
+    calistir wineboot -u
+    echo "WTA penceresinde çıkan kurulum sorularını onaylayın (Wine Mono ve Wine Gecko, winehq.org'dan iner)." ;;
+liste)
+    # --ham: "kimlik<TAB>ad" satırları (WTA merkezi için)
+    baglar
+    senkron
+    found=0
+    for k in "$KAYIT"/wta-*.app; do
+        [ -e "$k" ] || continue
+        ad=$(sed -n 's/^name=//p' "$k")
+        if [ "${2:-}" = --ham ]; then printf '%s\t%s\n' "$(basename "$k" .app)" "$ad"; else echo "$ad"; fi
+        found=1
+    done
+    [ $found = 1 ] || [ "${2:-}" = --ham ] || echo "(henüz kurulu Windows programı yok)" ;;
+kapat)
+    baglar
+    wine_env "" /opt/wine/bin/wineserver -k 2>/dev/null
+    echo "Windows programları kapatıldı." ;;
+sifirla)
+    [ "${2:-}" = --evet ] || { echo "C: sürücüsü ve kurulu tüm Windows programları silinecek. Onay: wta sifirla --evet"; exit 2; }
+    baglar
+    wine_env "" /opt/wine/bin/wineserver -k 2>/dev/null
+    rm -rf /root/.wine /root/.local/share/applications/wine
+    rm -f "$KAYIT"/wta-*.app; rm -rf "$KISAYOL"
+    echo "Windows ortamı silindi; ilk çalıştırmada yeniden hazırlanır." ;;
+surum|--version)
+    baglar
+    wine_env "" /opt/wine/bin/wine --version ;;
+*)
+    calistir "$@" ;;
+esac
+exit 0
