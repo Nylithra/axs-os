@@ -33,6 +33,7 @@ typedef struct {
 
 static const struct { const char *name; const char *path; IconId ic; } PLACES[] = {
     { "Ev", "/root", IC_HOME },
+    { "Masaüstü", "/root/Masaüstü", IC_HOME },
     { "İndirilenler", "/root/İndirilenler", IC_FOLDER },
     { "Resimler", "/root/Resimler", IC_FOLDER },
     { "Kalıcı disk", "/mnt/kalici", IC_SAVE },
@@ -41,6 +42,7 @@ static const struct { const char *name; const char *path; IconId ic; } PLACES[] 
     { "Paket deposu", "/var/lib/axpkg/repo", IC_PACKAGE },
     { "Geçici", "/tmp", IC_FOLDER },
     { "Kök dizin", "/", IC_FOLDER },
+    { "Çöp Kutusu", "/root/.cop", IC_TRASH },
 };
 #define N_PLACES ((int)(sizeof PLACES / sizeof PLACES[0]))
 
@@ -89,7 +91,7 @@ static void load(Win *w, const char *path)
     snprintf(st->status, sizeof st->status, "%d öğe", st->n);
     const char *base = strrchr(st->cwd, '/');
     char title[128];
-    snprintf(title, sizeof title, "Dosyalar — %s", (base && base[1]) ? base + 1 : "/");
+    snprintf(title, sizeof title, "Dosyalar — %s", fo_in_trash(st->cwd) ? "Çöp Kutusu" : (base && base[1]) ? base + 1 : "/");
     wm_set_title(w, title);
     w->dirty = 1;
 }
@@ -108,19 +110,7 @@ static void full_path(FilesSt *st, int i, char *out, size_t n)
     snprintf(out, n, "%s%s%s", st->cwd, strcmp(st->cwd, "/") ? "/" : "", st->ents[i].name);
 }
 
-static IconId ent_icon(Ent *e)
-{
-    if (e->dir)
-        return IC_FOLDER;
-    size_t l = strlen(e->name);
-    if ((l > 4 && !strcmp(e->name + l - 4, ".axs")) || (l > 4 && !strcmp(e->name + l - 4, ".nyl")))
-        return IC_AXSFILE;
-    if (l > 4 && !strcmp(e->name + l - 4, ".axp"))
-        return IC_PACKAGE;
-    if (e->exec)
-        return IC_EXEC;
-    return IC_FILE;
-}
+static IconId ent_icon(Ent *e) { return fo_icon(e->name, e->dir, e->exec); }
 
 static void open_ent(Win *w, int i)
 {
@@ -150,24 +140,195 @@ static void go_up(Win *w)
     load(w, p);
 }
 
-static void new_axs_file(Win *w)
+/* ---- dosya işlemleri (ortak: fileops.c) ---- */
+enum { FA_OPEN = 1, FA_RENAME, FA_COPY, FA_CUT, FA_TRASH, FA_PASTE, FA_NEW_DIR, FA_NEW_TEXT, FA_NEW_AXS,
+       FA_NEW_GUI, FA_RESTORE, FA_EMPTY, FA_TERMINAL, FA_DESKTOP, FA_EDIT };
+
+static void select_path(FilesSt *st, const char *path)
 {
+    const char *b = strrchr(path, '/');
+    b = b ? b + 1 : path;
+    for (int i = 0; i < st->n; i++)
+        if (!strcmp(st->ents[i].name, b))
+            st->sel = i;
+}
+
+static void notify_err(const char *what)
+{
+    wm_notify(what, strerror(errno), IC_FILES);
+}
+
+static int new_kind;
+static void new_done(const char *text, int id)
+{
+    Win *w = wm_find_id(id);
+    if (!w || !text)
+        return;
     FilesSt *st = w->st;
-    char p[PATH_MAX + 64];
-    for (int i = 1; i < 100; i++) {
-        snprintf(p, sizeof p, "%s/yeni%d.axs", st->cwd, i);
-        if (access(p, F_OK) != 0)
-            break;
-    }
-    FILE *f = fopen(p, "w");
-    if (!f) {
-        wm_notify("Dosya oluşturulamadı", strerror(errno), IC_FILES);
+    char out[PATH_MAX];
+    if (fo_create(st->cwd, text[0] ? text : NULL, new_kind, out, sizeof out) < 0) {
+        notify_err("Oluşturulamadı");
         return;
     }
-    fputs("# Yeni Axs programı\n\nad = \"dünya\"\nprint: Merhaba ad;!\n", f);
-    fclose(f);
     load(w, st->cwd);
-    wm_open(&APP_STUDIO, p);
+    select_path(st, out);
+    if (new_kind == FO_AXS || new_kind == FO_AXS_GUI)
+        wm_open(&APP_STUDIO, out);
+}
+
+static void ask_new(Win *w, int kind)
+{
+    static const char *titles[] = { "Yeni klasör", "Yeni metin belgesi", "Yeni Axs programı",
+                                    "Yeni pencereli program (kolay arayüz)" };
+    new_kind = kind;
+    wm_prompt(titles[kind], "Adını yaz:", fo_default_name(kind), "Oluştur", 1, new_done, w->id);
+}
+
+static char ren_path[PATH_MAX];
+static void rename_done(const char *text, int id)
+{
+    Win *w = wm_find_id(id);
+    if (!w || !text || !text[0])
+        return;
+    FilesSt *st = w->st;
+    char out[PATH_MAX];
+    if (fo_rename(ren_path, text, out, sizeof out) < 0) {
+        notify_err("Yeniden adlandırılamadı");
+        return;
+    }
+    load(w, st->cwd);
+    select_path(st, out);
+}
+
+static void empty_done(const char *text, int id)
+{
+    Win *w = wm_find_id(id);
+    if (!text)
+        return;
+    fo_empty_trash();
+    if (w)
+        load(w, ((FilesSt *)w->st)->cwd);
+}
+
+static void file_action(int a, int id)
+{
+    Win *w = wm_find_id(id);
+    if (!w)
+        return;
+    FilesSt *st = w->st;
+    int i = st->sel;
+    char p[PATH_MAX + 256], out[PATH_MAX];
+    int has = i >= 0 && i < st->n;
+    if (has)
+        full_path(st, i, p, sizeof p);
+    switch (a) {
+    case FA_OPEN: open_ent(w, i); return;
+    case FA_EDIT: if (has) wm_open(&APP_STUDIO, p); return;
+    case FA_RENAME:
+        if (!has)
+            return;
+        snprintf(ren_path, sizeof ren_path, "%s", p);
+        wm_prompt("Yeniden adlandır", "Yeni ad:", st->ents[i].name, "Tamam", 1, rename_done, w->id);
+        return;
+    case FA_COPY: case FA_CUT:
+        if (has) {
+            fo_clip_set(p, a == FA_CUT);
+            snprintf(st->status, sizeof st->status, "%s: %s", a == FA_CUT ? "Kesildi" : "Kopyalandı", st->ents[i].name);
+        }
+        break;
+    case FA_TRASH:
+        if (has && fo_trash(p) < 0)
+            notify_err("Silinemedi");
+        load(w, st->cwd);
+        st->sel = mini(i, st->n - 1);
+        return;
+    case FA_RESTORE:
+        if (has && fo_restore(p) < 0)
+            notify_err("Geri yüklenemedi");
+        else if (has)
+            wm_notify("Geri yüklendi", st->ents[i].name, IC_FILES);
+        load(w, st->cwd);
+        return;
+    case FA_EMPTY:
+        wm_prompt("Çöp Kutusu'nu boşalt", "İçindeki her şey kalıcı olarak silinecek.", NULL, "Boşalt", 0, empty_done, w->id);
+        return;
+    case FA_PASTE:
+        if (fo_paste(st->cwd, out, sizeof out) < 0) {
+            notify_err("Yapıştırılamadı");
+            return;
+        }
+        load(w, st->cwd);
+        select_path(st, out);
+        break;
+    case FA_NEW_DIR: ask_new(w, FO_DIR); return;
+    case FA_NEW_TEXT: ask_new(w, FO_TEXT); return;
+    case FA_NEW_AXS: ask_new(w, FO_AXS); return;
+    case FA_NEW_GUI: ask_new(w, FO_AXS_GUI); return;
+    case FA_TERMINAL: {
+        char cmd[PATH_MAX + 32];
+        snprintf(cmd, sizeof cmd, "cd '%s' && exec bash", st->cwd);
+        wm_run_in_terminal(cmd, "Terminal");
+        return;
+    }
+    case FA_DESKTOP:
+        if (has) {
+            mkdir(desktop_dir(), 0755);
+            fo_clip_set(p, 0);
+            if (fo_paste(desktop_dir(), out, sizeof out) < 0)
+                notify_err("Masaüstüne kopyalanamadı");
+            else
+                wm_notify("Masaüstüne kopyalandı", st->ents[i].name, IC_HOME);
+        }
+        return;
+    }
+    w->dirty = 1;
+}
+
+static void new_menu(Win *w, int x, int y)
+{
+    static const MenuItem m[] = {
+        { "Klasör", FA_NEW_DIR, IC_FOLDER },
+        { "Metin belgesi", FA_NEW_TEXT, IC_FILE },
+        { "Axs programı", FA_NEW_AXS, IC_AXSFILE },
+        { "Pencereli program (kolay arayüz)", FA_NEW_GUI, IC_STUDIO },
+    };
+    wm_menu(x, y, m, 4, file_action, w->id);
+}
+
+static void context_menu(Win *w, int x, int y, int on_item)
+{
+    FilesSt *st = w->st;
+    MenuItem m[MENU_MAX];
+    int n = 0, trash = fo_in_trash(st->cwd);
+    if (on_item) {
+        Ent *e = &st->ents[st->sel];
+        m[n++] = (MenuItem){ "Aç", FA_OPEN, e->dir ? IC_FOLDER : IC_PLAY };
+        if (!e->dir && e->size < 1024 * 1024)
+            m[n++] = (MenuItem){ "Axs Stüdyo ile düzenle", FA_EDIT, IC_STUDIO };
+        if (trash) {
+            m[n++] = (MenuItem){ "Geri yükle", FA_RESTORE, IC_REFRESH };
+            m[n++] = (MenuItem){ "Kalıcı olarak sil", FA_TRASH, IC_TRASH };
+        } else {
+            m[n++] = (MenuItem){ "Yeniden adlandır  (F2)", FA_RENAME, IC_NEW };
+            m[n++] = (MenuItem){ "Kopyala  (Ctrl+C)", FA_COPY, IC_FILE };
+            m[n++] = (MenuItem){ "Kes  (Ctrl+X)", FA_CUT, IC_FILE };
+            m[n++] = (MenuItem){ "Masaüstüne kopyala", FA_DESKTOP, IC_HOME };
+            m[n++] = (MenuItem){ "Çöpe taşı  (Delete)", FA_TRASH, IC_TRASH };
+        }
+    } else if (trash) {
+        if (st->n)
+            m[n++] = (MenuItem){ "Çöpü boşalt", FA_EMPTY, IC_TRASH };
+    } else {
+        m[n++] = (MenuItem){ "Yeni klasör", FA_NEW_DIR, IC_FOLDER };
+        m[n++] = (MenuItem){ "Yeni metin belgesi", FA_NEW_TEXT, IC_FILE };
+        m[n++] = (MenuItem){ "Yeni Axs programı", FA_NEW_AXS, IC_AXSFILE };
+        m[n++] = (MenuItem){ "Yeni pencereli program", FA_NEW_GUI, IC_STUDIO };
+        if (fo_clip_has())
+            m[n++] = (MenuItem){ "Yapıştır  (Ctrl+V)", FA_PASTE, IC_FILES };
+        m[n++] = (MenuItem){ "Burada terminal aç", FA_TERMINAL, IC_TERMINAL };
+    }
+    if (n)
+        wm_menu(x, y, m, n, file_action, w->id);
 }
 
 static void f_draw(Win *w, Surf *s)
@@ -212,8 +373,13 @@ static void f_draw(Win *w, Surf *s)
     surf_clip(s, rect_isect(oc, rect_inset(pathr, 2)));
     draw_text_fit(s, F_UI, 13, pathr.x + 12, pathr.y + 9, pathr.w - 20, T.text, st->cwd);
     s->clip = oc;
-    if (ui_button(s, u, (Rect){ W - 140, 10, 128, 34 }, "+ Axs dosyası", BTN_PRIMARY))
-        new_axs_file(w);
+    if (fo_in_trash(st->cwd)) {
+        if (ui_button(s, u, (Rect){ W - 140, 10, 128, 34 }, "Çöpü boşalt", BTN_DANGER) && st->n)
+            file_action(FA_EMPTY, w->id);
+    } else if (ui_button(s, u, (Rect){ W - 140, 10, 128, 34 }, "+ Yeni", BTN_PRIMARY)) {
+        Rect cr = wm_content_rect(w);
+        new_menu(w, cr.x + W - 260, cr.y + 48);
+    }
 
     /* başlık satırı */
     int ly = 56;
@@ -262,7 +428,7 @@ static void f_draw(Win *w, Surf *s)
     fill_rect(s, (Rect){ SIDE_W, H - 28, W - SIDE_W, 28 }, T.base);
     char stt[256];
     if (st->sel >= 0 && st->sel < st->n)
-        snprintf(stt, sizeof stt, "%s   •   Seçili: %s   •   Açmak için çift tıkla", st->status, st->ents[st->sel].name);
+        snprintf(stt, sizeof stt, "%s   •   Seçili: %s   •   Çift tık: aç, sağ tık: işlemler", st->status, st->ents[st->sel].name);
     else
         snprintf(stt, sizeof stt, "%s", st->status);
     draw_text_fit(s, F_UI, 12, SIDE_W + 14, H - 22, W - SIDE_W - 28, T.muted, stt);
@@ -274,6 +440,18 @@ static void f_mouse(Win *w, MouseEv *e)
     if (e->kind == M_WHEEL) {
         st->scroll -= e->wheel * 3;
         w->dirty = 1;
+        return;
+    }
+    if (e->kind == M_DOWN && e->button == 2 && e->x > SIDE_W) {
+        /* sağ tık: satırdaysa seç ve öğe menüsü, değilse klasör menüsü */
+        int ly = 80, H = w->content.h, vis = (H - ly - 30) / ROW_H;
+        int row = (e->y - ly) / ROW_H, idx = row + st->scroll;
+        int on = e->y >= ly && row < vis && idx < st->n;
+        if (on)
+            st->sel = idx;
+        w->dirty = 1;
+        Rect cr = wm_content_rect(w);
+        context_menu(w, cr.x + e->x, cr.y + e->y, on);
         return;
     }
     ui_dispatch(w, &st->ui, e);
@@ -295,6 +473,12 @@ static void f_key(Win *w, KeyEv *e)
     case KEY_ENTER: case KEY_KPENTER: open_ent(w, st->sel); return;
     case KEY_BACKSPACE: go_up(w); return;
     case KEY_F5: load(w, st->cwd); return;
+    case KEY_F2: file_action(FA_RENAME, w->id); return;
+    case KEY_DELETE: file_action(FA_TRASH, w->id); return;
+    case KEY_C: if (e->mods & MOD_CTRL) file_action(FA_COPY, w->id); return;
+    case KEY_X: if (e->mods & MOD_CTRL) file_action(FA_CUT, w->id); return;
+    case KEY_V: if (e->mods & MOD_CTRL) file_action(FA_PASTE, w->id); return;
+    case KEY_N: if (e->mods & MOD_CTRL) ask_new(w, (e->mods & MOD_SHIFT) ? FO_DIR : FO_TEXT); return;
     default: return;
     }
     if (st->sel < st->scroll)

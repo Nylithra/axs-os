@@ -250,6 +250,47 @@ extern const App APP_TERMINAL, APP_FILES, APP_STUDIO, APP_PACKAGES,
                  APP_MONITOR, APP_SETTINGS, APP_ABOUT;
 
 Win *wm_open(const App *app, const char *arg);
+/* Menüler ve iletişim kutuları (wm.c) */
+typedef struct { const char *label; int action; IconId icon; } MenuItem;
+typedef void (*MenuCb)(int action, int ctx);
+#define MENU_MAX 14
+void wm_menu(int x, int y, const MenuItem *items, int n, MenuCb cb, int ctx); /* ctx: ör. pencere kimliği */
+/* Metin isteyen kutu (ad verme): text NULL ise iptal edildi. field=0: yalnızca onay */
+typedef void (*PromptCb)(const char *text, int ctx);
+void wm_prompt(const char *title, const char *msg, const char *initial, const char *ok, int field,
+               PromptCb cb, int ctx);
+Win *wm_find_id(int id);
+
+/* Masaüstü (desktop.c): ~/Masaüstü içeriği simge olarak */
+void desktop_init(void);
+void desktop_draw(Surf *s, Rect clip);
+int  desktop_mouse(MouseEv *e);   /* 1 = olay masaüstünce işlendi */
+int  desktop_grabbing(void);      /* simge sürükleniyor */
+int  desktop_focused(void);
+void desktop_blur(void);
+void desktop_key(KeyEv *e);
+void desktop_tick(void);
+int  desktop_add_shortcut(const char *app_id);
+const char *desktop_dir(void);
+
+/* Dosya işlemleri (fileops.c): masaüstü ve Dosyalar ortak kullanır */
+enum { FO_DIR, FO_TEXT, FO_AXS, FO_AXS_GUI };
+IconId fo_icon(const char *name, int dir, int exec);
+int  fo_unique(const char *dir, const char *name, char *out, size_t n);
+int  fo_create(const char *dir, const char *name, int kind, char *out, size_t n); /* 0 = tamam */
+int  fo_rename(const char *path, const char *newname, char *out, size_t n);
+int  fo_trash(const char *path);            /* çöpe taşı */
+int  fo_restore(const char *trash_path);    /* çöpten geri yükle */
+void fo_empty_trash(void);
+int  fo_trash_count(void);
+const char *fo_trash_dir(void);
+int  fo_in_trash(const char *path);
+void fo_clip_set(const char *path, int cut);
+int  fo_clip_has(void);
+int  fo_paste(const char *dir, char *out, size_t n);
+int  fo_move_into(const char *path, const char *dir);
+const char *fo_default_name(int kind);
+
 Win *wm_find(const App *app);
 void wm_close(Win *w);
 void wm_focus(Win *w);

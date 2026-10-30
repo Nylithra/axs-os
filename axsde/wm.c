@@ -92,10 +92,18 @@ static Surf launcher_bg;
 static int launcher_hover = -1;
 
 /* menüler */
-typedef struct { const char *label; int action; IconId icon; } MenuItem;
-static MenuItem menu_items[8];
+static MenuItem menu_items[MENU_MAX];
 static int menu_n, menu_open, menu_hover = -1;
 static Rect menu_rect;
+static MenuCb menu_cb;   /* NULL: masaüstü kabuğunun kendi eylemleri (do_action) */
+static int menu_ctx;
+
+/* metin isteyen / onay kutusu */
+static int prompt_open, prompt_field, prompt_ctx, prompt_hover = -1;
+static int prompt_sel;   /* seçili bölümün sonu (baştan itibaren); yazınca yerine geçer */
+static char prompt_title[96], prompt_msg[160], prompt_ok[32];
+static TextField pf;
+static PromptCb prompt_cb;
 enum { ACT_NONE, ACT_POWEROFF, ACT_REBOOT, ACT_CONSOLE, ACT_TERMINAL, ACT_WALLPAPER,
        ACT_SETTINGS, ACT_ABOUT, ACT_FILES, ACT_STUDIO };
 
@@ -342,6 +350,7 @@ void wm_focus(Win *w)
     damage_win(w);
     damage_bar();
     damage_dock();
+    desktop_blur();
 }
 
 void wm_win_dirty(Win *w) { w->dirty = 1; }
@@ -517,6 +526,9 @@ void wm_notify(const char *title, const char *body, IconId icon)
 
 static void open_menu(int x, int y, const MenuItem *items, int n)
 {
+    if (n > MENU_MAX)
+        n = MENU_MAX;
+    menu_cb = NULL;
     menu_n = n;
     memcpy(menu_items, items, sizeof(MenuItem) * n);
     int w = 230;
@@ -527,6 +539,119 @@ static void open_menu(int x, int y, const MenuItem *items, int n)
     menu_open = 1;
     menu_hover = -1;
     wm_damage(rect_inset(menu_rect, -30));
+}
+
+void wm_menu(int x, int y, const MenuItem *items, int n, MenuCb cb, int ctx)
+{
+    open_menu(x, y, items, n);
+    menu_cb = cb;
+    menu_ctx = ctx;
+}
+
+Win *wm_find_id(int id)
+{
+    for (int i = 0; i < nwins; i++)
+        if (wins[i]->id == id)
+            return wins[i];
+    return NULL;
+}
+
+/* ---- metin isteyen kutu ---- */
+static Rect prompt_rect(void)
+{
+    int w = 460, h = prompt_field ? 210 : 170;
+    return (Rect){ (SCREEN_W - w) / 2, (SCREEN_H - h) / 2 - 60, w, h };
+}
+static Rect prompt_btn(int i) /* 0 iptal, 1 tamam */
+{
+    Rect r = prompt_rect();
+    return (Rect){ r.x + r.w - 20 - (2 - i) * 132 + 12, r.y + r.h - 56, 120, 38 };
+}
+static Rect prompt_field_rect(void)
+{
+    Rect r = prompt_rect();
+    return (Rect){ r.x + 22, r.y + 92, r.w - 44, 40 };
+}
+
+void wm_prompt(const char *title, const char *msg, const char *initial, const char *ok, int field,
+               PromptCb cb, int ctx)
+{
+    snprintf(prompt_title, sizeof prompt_title, "%s", title);
+    snprintf(prompt_msg, sizeof prompt_msg, "%s", msg ? msg : "");
+    snprintf(prompt_ok, sizeof prompt_ok, "%s", ok ? ok : "Tamam");
+    prompt_field = field;
+    prompt_cb = cb;
+    prompt_ctx = ctx;
+    prompt_hover = -1;
+    tf_set(&pf, initial ? initial : "");
+    pf.focus = 1;
+    /* imleç uzantının önünde: "Yeni belge|.txt" */
+    const char *dot = strrchr(pf.buf, '.');
+    if (dot && dot != pf.buf && pf.buf[0])
+        pf.cur = (int)(dot - pf.buf);
+    prompt_sel = pf.cur;
+    prompt_open = 1;
+    wm_damage(rect_inset(prompt_rect(), -40));
+}
+
+static void prompt_finish(int ok)
+{
+    if (!prompt_open)
+        return;
+    prompt_open = 0;
+    wm_damage(rect_inset(prompt_rect(), -40));
+    PromptCb cb = prompt_cb;
+    prompt_cb = NULL;
+    if (cb)
+        cb(ok ? pf.buf : NULL, prompt_ctx);
+}
+
+static void draw_prompt(Surf *s)
+{
+    Rect r = prompt_rect();
+    draw_shadow(s, r, 16, 30, 10, 170);
+    fill_rrect(s, r, 16, ALPHA(HEX(0x1C1C2C), 250));
+    stroke_rrect(s, r, 16, 1, ALPHA(HEX(0xFFFFFF), 34));
+    draw_text(s, F_UI_BOLD, 17, r.x + 22, r.y + 22, T.text, prompt_title);
+    draw_text_wrap(s, F_UI, 13, r.x + 22, r.y + 56, r.w - 44, 2, 17, T.subtext, prompt_msg);
+    if (prompt_field) {
+        Rect fr = prompt_field_rect();
+        tf_draw(s, &pf, fr, "");
+        if (prompt_sel > 0) {
+            int ty = fr.y + (fr.h - font_height(F_UI, 14)) / 2;
+            fill_rrect(s, (Rect){ fr.x + 10, ty - 1, text_width_n(F_UI, 14, pf.buf, prompt_sel) + 4, font_height(F_UI, 14) + 2 },
+                       4, ALPHA(T.accent, 110));
+        }
+    }
+    for (int i = 0; i < 2; i++) {
+        Rect b = prompt_btn(i);
+        uint32_t bg = i ? T.accent : T.surface2;
+        if (i == prompt_hover)
+            bg = lighten(bg, 22);
+        fill_rrect(s, b, 10, bg);
+        draw_text_center(s, i ? F_UI_BOLD : F_UI, 14, b, HEX(0xFFFFFF), i ? prompt_ok : "İptal");
+    }
+}
+
+static void prompt_mouse(MouseEv *e)
+{
+    if (e->kind == M_MOVE) {
+        int h = -1;
+        for (int i = 0; i < 2; i++)
+            if (rect_has(prompt_btn(i), e->x, e->y))
+                h = i;
+        if (h != prompt_hover) {
+            prompt_hover = h;
+            wm_damage(prompt_rect());
+        }
+        return;
+    }
+    if (e->kind != M_DOWN)
+        return;
+    if (rect_has(prompt_btn(1), e->x, e->y))
+        prompt_finish(1);
+    else if (rect_has(prompt_btn(0), e->x, e->y) || !rect_has(prompt_rect(), e->x, e->y))
+        prompt_finish(0);
 }
 
 static void close_menu(void)
@@ -922,6 +1047,7 @@ static void render_scene(Rect clip, int with_overlays)
 {
     surf_clip(&screen, clip);
     blit(&screen, clip.x, clip.y, &wall, clip);
+    desktop_draw(&screen, clip);
     Win *f = wm_focused();
     for (int i = 0; i < nwins; i++) {
         Win *w = wins[i];
@@ -947,6 +1073,8 @@ static void render_scene(Rect clip, int with_overlays)
         draw_menu(&screen);
     if (launcher_open)
         draw_launcher(&screen);
+    if (prompt_open)
+        draw_prompt(&screen);
 }
 
 static void compose(void)
@@ -1048,6 +1176,13 @@ static void launcher_mouse(MouseEv *e)
         close_launcher();
         return;
     }
+    if (launcher_hover >= 0 && e->button == 2) {
+        AppEntry *m[64];
+        int n = launcher_matches(m);
+        if (launcher_hover < n && desktop_add_shortcut(m[launcher_hover]->id) == 0)
+            wm_notify("Masaüstüne eklendi", m[launcher_hover]->name, IC_HOME);
+        return;
+    }
     if (launcher_hover >= 0) {
         lsel = launcher_hover;
         launcher_run();
@@ -1090,6 +1225,10 @@ void wm_on_mouse(MouseEv *e)
         last_click_btn = e->button;
     }
 
+    if (prompt_open) {
+        prompt_mouse(e);
+        return;
+    }
     if (launcher_open) {
         launcher_mouse(e);
         return;
@@ -1109,9 +1248,20 @@ void wm_on_mouse(MouseEv *e)
         }
         if (e->kind == M_DOWN) {
             int act = (menu_hover >= 0 && rect_has(menu_rect, e->x, e->y)) ? menu_items[menu_hover].action : ACT_NONE;
+            MenuCb cb = menu_cb;
             close_menu();
-            do_action(act);
+            if (cb) {
+                if (act != ACT_NONE)
+                    cb(act, menu_ctx);
+            } else {
+                do_action(act);
+            }
         }
+        return;
+    }
+
+    if (desktop_grabbing()) {    /* masaüstü simgesi sürükleniyor */
+        desktop_mouse(e);
         return;
     }
 
@@ -1186,6 +1336,12 @@ void wm_on_mouse(MouseEv *e)
             to_content(w, e, &ce);
             w->app->mouse(w, &ce);
         }
+        {   /* masaüstü simgesi vurgusu: pencere/dock üzerindeyken yok */
+            MouseEv de = *e;
+            if (w || di >= 0 || e->y < BAR_H)
+                de.x = de.y = -10000;
+            desktop_mouse(&de);
+        }
         return;
     }
 
@@ -1221,6 +1377,7 @@ void wm_on_mouse(MouseEv *e)
                 return;
             }
         if (w) {
+            desktop_blur();
             if (w != wm_focused())
                 wm_focus(w);
             if (e->y < w->r.y + TITLE_H) {
@@ -1254,17 +1411,8 @@ void wm_on_mouse(MouseEv *e)
                 w->app->mouse(w, &ce);
             return;
         }
-        /* masaüstü */
-        if (e->button == 2) {
-            static const MenuItem dm[] = {
-                { "Terminal aç", ACT_TERMINAL, IC_TERMINAL },
-                { "Dosyalar", ACT_FILES, IC_FILES },
-                { "Axs Stüdyo", ACT_STUDIO, IC_STUDIO },
-                { "Duvar kâğıdını değiştir", ACT_WALLPAPER, IC_REFRESH },
-                { "Ayarlar", ACT_SETTINGS, IC_SETTINGS },
-            };
-            open_menu(e->x, e->y, dm, 5);
-        }
+        /* masaüstü: simgeler, sağ tık menüsü */
+        desktop_mouse(e);
         return;
     }
 
@@ -1317,9 +1465,43 @@ void wm_on_key(KeyEv *e)
     }
     if (e->down)
         super_alone = 0;
+    if (prompt_open) {
+        if (!e->down)
+            return;
+        if (e->code == KEY_ESC) {
+            prompt_finish(0);
+            return;
+        }
+        if (prompt_field && (e->mods & MOD_CTRL) && e->code == KEY_A) {
+            prompt_sel = pf.cur = pf.len;
+            wm_damage(prompt_field_rect());
+            return;
+        }
+        if (prompt_field && prompt_sel > 0) {
+            int c = e->code;
+            if (c == KEY_LEFT || c == KEY_RIGHT || c == KEY_HOME || c == KEY_END) {
+                prompt_sel = 0;
+            } else if (c != KEY_ENTER && c != KEY_KPENTER && (e->ch || c == KEY_BACKSPACE || c == KEY_DELETE)) {
+                /* seçili bölümü sil; Backspace/Delete yalnızca siler */
+                memmove(pf.buf, pf.buf + prompt_sel, pf.len - prompt_sel + 1);
+                pf.len -= prompt_sel;
+                pf.cur = 0;
+                prompt_sel = 0;
+                wm_damage(prompt_field_rect());
+                if (c == KEY_BACKSPACE || c == KEY_DELETE)
+                    return;
+            }
+        }
+        int r = prompt_field ? tf_key(&pf, e) : (e->code == KEY_ENTER || e->code == KEY_KPENTER) ? 2 : 0;
+        if (r == 2)
+            prompt_finish(1);
+        else if (r)
+            wm_damage(prompt_field_rect());
+        return;
+    }
     if (!e->down) {
         Win *f = wm_focused();
-        if (f && f->app->key && !launcher_open)
+        if (f && f->app->key && !launcher_open && !desktop_focused())
             f->app->key(f, e);
         return;
     }
@@ -1370,6 +1552,10 @@ void wm_on_key(KeyEv *e)
             lsel = 0;
             wm_damage(launcher_rect());
         }
+        return;
+    }
+    if (desktop_focused()) {
+        desktop_key(e);
         return;
     }
     Win *f = wm_focused();
@@ -1464,6 +1650,7 @@ static void tick(void)
     for (int i = 0; i < nwins; i++)
         if (wins[i]->app->tick)
             wins[i]->app->tick(wins[i]);
+    desktop_tick();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1646,6 +1833,7 @@ int main(int argc, char **argv)
     if (input_init() < 0)
         fprintf(stderr, "axsde: giriş aygıtı bulunamadı\n");
     apps_scan();
+    desktop_init();
     if (ext_init() < 0)
         fprintf(stderr, "axsde: uygulama soketi açılamadı\n");
     update_clock();
