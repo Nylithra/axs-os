@@ -10,6 +10,8 @@
 #   APPEND="..." ./run.sh    kernel komut satırına ekle
 #   MEM=4G ./run.sh          bellek miktarı (varsayılan 512M, masaüstünde 2G; tarayıcı için 3-4G)
 #   PORT=6080 ./run.sh gui   tarayıcı kipinde HTTP portu
+#   DISK=yol ./run.sh        kalıcı depolama diski (varsayılan: build/veri.qcow2, 20 GB, yoksa oluşturulur;
+#                            TIMEOUT verilen otomatik testlerde disk yok). DISK=none: disksiz (canlı kip)
 # QEMU'dan çıkış: Ctrl-a ardından x   (ya da sistemde: poweroff)
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -21,11 +23,25 @@ MODE="${1:-kernel}"
 GUI=0
 case "$MODE" in gui|iso-gui) GUI=1 ;; esac
 
-ARGS=(-m "${MEM:-$([ $GUI = 1 ] && echo 2G || echo 512M)}" -no-reboot -nic user,model=e1000)
+ARGS=(-m "${MEM:-$([ $GUI = 1 ] && echo 2G || echo 512M)}" -nic user,model=e1000)
+# otomatik testlerde "reboot" QEMU'yu kapatsın; elle kullanımda gerçekten yeniden başlasın
+[ -n "${TIMEOUT:-}" ] && ARGS+=(-no-reboot)
 if [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
     ARGS+=(-enable-kvm -cpu host)
 else
     ARGS+=(-accel tcg -smp 2)
+fi
+
+# Kalıcı depolama diski: AxsOS ilk açılışta "Ayarlar > Depolama"dan hazırlamayı önerir
+if [ -z "${DISK:-}" ] && [ -z "${TIMEOUT:-}" ]; then DISK="$BUILD/veri.qcow2"; fi
+if [ -n "${DISK:-}" ] && [ "$DISK" != none ]; then
+    if [ ! -e "$DISK" ]; then
+        command -v qemu-img >/dev/null || { echo "qemu-img yok: ./build.sh deps" >&2; exit 1; }
+        echo "[axsos] Kalıcı depolama diski oluşturuluyor: $DISK (20 GB, yer kapladıkça büyür)"
+        qemu-img create -q -f qcow2 "$DISK" 20G
+    fi
+    case "$DISK" in *.qcow2) DFMT=qcow2 ;; *) DFMT=raw ;; esac
+    ARGS+=(-drive "file=$DISK,if=virtio,format=$DFMT")
 fi
 
 KCMD="panic=-1 ${APPEND:-}"

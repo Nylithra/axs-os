@@ -1653,8 +1653,17 @@ int main(int argc, char **argv)
     wm_damage_all();
     compose();
 
-    /* ilk açılışta karşılama penceresi */
-    wm_open(&APP_ABOUT, "welcome");
+    /* karşılama penceresi: canlı kipte her açılışta; kalıcı depolamada yalnızca ilk kez */
+    {
+        const char *mark = "/root/.config/axsde-hosgeldin";
+        if (access("/run/axs-kalici", F_OK) != 0 || access(mark, F_OK) != 0) {
+            wm_open(&APP_ABOUT, "welcome");
+            mkdir("/root/.config", 0755);
+            FILE *mf = fopen(mark, "w");
+            if (mf)
+                fclose(mf);
+        }
+    }
 
     long next_tick = now_ms() + 250, next_net = now_ms() + 5000, next_scan = now_ms() + 3000;
     while (quit_code < 0 && !got_term) {

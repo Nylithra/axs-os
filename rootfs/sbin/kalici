@@ -1,0 +1,121 @@
+#!/bin/sh
+# kalici - AxsOS kalıcı depolama aracı
+#
+# AxsOS ISO'dan açılır; sistem RAM'de çalışır. "AXSOS-VERI" etiketli bir ext4 disk varsa init
+# onu kök dizinin üst katmanı yapar: kurulan paketler, dosyalar ve ayarlar diske yazılır ve
+# yeniden başlatınca korunur (disk /mnt/kalici'de görünür).
+#
+#   kalici durum               etkin mi, hangi disk, ne kadar dolu
+#   kalici diskler             diskler: ad boyut(bayt) durum model   (durum: axsos | bos | dolu)
+#   kalici hazirla <disk>      diski kalıcı depolama olarak biçimlendir (boş değilse --evet gerekir)
+#   kalici sifirla [--iptal]   yeniden başlatınca tüm değişiklikleri sil (fabrika ayarları)
+#   kalici takas               diskte takas dosyası oluşturup aç (açılışta kendiliğinden)
+ETIKET=AXSOS-VERI
+K=/mnt/kalici
+cmd="${1:-durum}"
+
+etkin() { [ -f /run/axs-kalici ]; }
+hata() { echo "kalici: $*" >&2; exit 1; }
+
+# disk ilk 1 MB'ı tamamen sıfır mı (hiç kullanılmamış yeni disk)
+bos_mu() {
+    [ "$(dd if="$1" bs=65536 count=16 2>/dev/null | tr -d '\000' | head -c 1 | wc -c)" = 0 ]
+}
+etiket() { blkid "$1" 2>/dev/null | sed -n 's/.*LABEL="\([^"]*\)".*/\1/p'; }
+
+diskler() {
+    for d in /sys/block/*; do
+        n=${d##*/}
+        case "$n" in loop*|ram*|zram*|sr*|fd*) continue ;; esac
+        sec=$(cat "$d/size" 2>/dev/null)
+        [ "${sec:-0}" -gt 0 ] || continue
+        model=$(cat "$d/device/model" 2>/dev/null | tr -s ' ' | sed 's/ *$//')
+        [ -z "$model" ] && model=$(cat "$d/device/vendor" 2>/dev/null | tr -s ' ' | sed 's/ *$//')
+        case "$n" in vd*) model="Sanal disk (virtio)" ;; esac
+        if [ "$(etiket "/dev/$n")" = "$ETIKET" ]; then durum=axsos
+        elif ls "$d" | grep -q "^$n"; then durum=dolu        # bölümleri var
+        elif bos_mu "/dev/$n"; then durum=bos
+        else durum=dolu; fi
+        echo "$n $((sec * 512)) $durum ${model:-Disk}"
+    done
+}
+
+insan() { awk -v b="$1" 'BEGIN { if (b >= 1e9) printf "%.1f GB", b / 1e9; else printf "%d MB", b / 1e6 }'; }
+
+case "$cmd" in
+durum)
+    if etkin; then
+        dev=$(cat /run/axs-kalici)
+        set -- $(df -k "$K" 2>/dev/null | awk 'NR == 2 {print $2, $3, $4}')
+        echo "Kalıcı depolama: ETKİN ($dev, $K)"
+        [ -n "${1:-}" ] && echo "Kullanım: $(insan $(( $2 * 1024 ))) / $(insan $(( $1 * 1024 ))) (boş $(insan $(( $3 * 1024 ))))"
+        [ -f "$K/SIFIRLA" ] && echo "Not: yeniden başlatınca SIFIRLANACAK (iptal: kalici sifirla --iptal)"
+        grep -q "$K/takas" /proc/swaps 2>/dev/null && echo "Takas: $(awk '/takas/ {printf "%d MB", $3 / 1024}' /proc/swaps)"
+    else
+        echo "Kalıcı depolama: KAPALI (canlı kip: değişiklikler yeniden başlatınca silinir)"
+        echo
+        echo "Diskler:"
+        diskler | while read n b d m; do
+            case "$d" in
+                axsos) s="AxsOS verisi (yeniden başlatınca etkinleşir)" ;;
+                bos) s="boş — kullanılabilir: kalici hazirla $n" ;;
+                *) s="üzerinde veri var" ;;
+            esac
+            printf '  %-8s %-9s %-28s %s\n' "$n" "$(insan "$b")" "$m" "$s"
+        done
+    fi ;;
+diskler)
+    diskler ;;
+hazirla)
+    [ -n "${2:-}" ] || hata "kullanım: kalici hazirla <disk> [--evet]   (diskler: kalici diskler)"
+    n=${2#/dev/}; dev=/dev/$n
+    [ -b "$dev" ] || hata "$dev bir disk değil"
+    [ -d "/sys/block/$n" ] || hata "$n bütün bir disk olmalı (bölüm değil)"
+    if etkin && [ "$(cat /run/axs-kalici)" = "$dev" ]; then hata "$dev şu an kalıcı depolama olarak kullanılıyor"; fi
+    grep -q "^$dev" /proc/mounts && hata "$dev (ya da bir bölümü) bağlı; önce ayırın"
+    grep -q "^$dev" /proc/swaps && hata "$dev takas olarak kullanılıyor"
+    if ! bos_mu "$dev" && [ "${3:-}" != --evet ]; then
+        echo "UYARI: $dev boş değil; üzerindeki HER ŞEY SİLİNECEK." >&2
+        echo "Emin misiniz? Onaylamak için: kalici hazirla $n --evet" >&2
+        exit 2
+    fi
+    b=$(( $(cat /sys/block/$n/size) * 512 ))
+    [ $b -ge 1000000000 ] || hata "disk çok küçük ($(insan $b)); en az 1 GB gerekli"
+    echo "$dev ($(insan $b)) kalıcı depolama olarak hazırlanıyor..."
+    dd if=/dev/zero of="$dev" bs=1M count=4 conv=fsync 2>/dev/null   # eski imzaları sil
+    mke2fs -q -F -t ext4 -L "$ETIKET" -m 1 -E lazy_itable_init=1,lazy_journal_init=1 "$dev" \
+        || hata "biçimlendirilemedi"
+    mkdir -p /run/kalici-hazir
+    mount -t ext4 "$dev" /run/kalici-hazir || hata "yeni disk bağlanamadı"
+    mkdir -p /run/kalici-hazir/sistem/ust /run/kalici-hazir/sistem/is
+    cat > /run/kalici-hazir/BENI-OKU.txt <<'EOT'
+Bu disk AxsOS kalıcı depolamasıdır (etiket: AXSOS-VERI).
+sistem/ust  : kök dizindeki tüm değişiklikler (kurulan paketler, /root, ayarlar)
+takas       : takas dosyası
+AxsOS'u bu disk takılıyken açınca değişiklikler korunur.
+EOT
+    umount /run/kalici-hazir
+    sync
+    echo "Hazır. Yeniden başlatınca kalıcı depolama etkinleşir (reboot)."
+    echo "Not: şu anki oturumda yaptığınız değişiklikler (canlı kip) aktarılmaz." ;;
+sifirla)
+    etkin || hata "kalıcı depolama etkin değil"
+    if [ "${2:-}" = --iptal ]; then rm -f "$K/SIFIRLA"; echo "Sıfırlama iptal edildi."; exit 0; fi
+    touch "$K/SIFIRLA" && sync
+    echo "Yeniden başlatınca kalıcı depolamadaki TÜM değişiklikler silinecek (fabrika ayarları)."
+    echo "İptal: kalici sifirla --iptal" ;;
+takas)
+    etkin || exit 0
+    grep -q "$K/takas" /proc/swaps && exit 0
+    if [ ! -f "$K/takas" ]; then
+        mem=$(awk '/MemTotal/ {print int($2 / 1024)}' /proc/meminfo)
+        bos=$(df -m "$K" | awk 'NR == 2 {print $4}')
+        mb=$mem; [ $mb -gt 2048 ] && mb=2048; [ $mb -gt $((bos / 4)) ] && mb=$((bos / 4))
+        [ $mb -ge 128 ] || exit 0
+        dd if=/dev/zero of="$K/takas.yeni" bs=1M count=$mb 2>/dev/null && chmod 600 "$K/takas.yeni" \
+            && mkswap "$K/takas.yeni" >/dev/null && mv "$K/takas.yeni" "$K/takas" || { rm -f "$K/takas.yeni"; exit 1; }
+    fi
+    swapon "$K/takas" 2>/dev/null ;;
+*)
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

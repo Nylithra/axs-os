@@ -47,6 +47,9 @@ jobs:
       - name: ISO açılış testi (metin + masaüstü)
         run: scripts/ci-test.sh
 
+      - name: Kalıcı depolama testi (aynı diskle dört açılış)
+        run: scripts/ci-kalici-test.sh
+
       - name: Tarayıcı paketleri (Ubuntu kütüphaneleri + Xvfb + xkopru köprüsü)
         run: |
           sudo apt-get install -y debootstrap
@@ -76,6 +79,7 @@ jobs:
             build/out/ekran.png
             build/out/test-seri.log
             build/out/tarayici-seri.log
+            build/out/kalici-seri.log
             build/out/firefox.png
             build/out/chrome.png
             build/out/firefox-masaustu.png
@@ -95,17 +99,22 @@ jobs:
           \`axpkg install firefox\` / \`axpkg install google-chrome\` ile internetten kurulur.
           Tarayıcı için sanal makineye en az 3-4 GB bellek verin.
 
+          **Kalıcı depolama:** sanal makineye boş bir disk ekleyin (ör. \`qemu-img create -f qcow2 veri.qcow2 20G\`,
+          QEMU'ya \`-drive file=veri.qcow2,if=virtio\`); AxsOS ilk açılışta Ayarlar > Depolama'dan tek tıkla
+          hazırlar. Sonra kurulan uygulamalar, dosyalar ve ayarlar yeniden başlatınca korunur.
+
           - Commit: \`${{ steps.info.outputs.short }}\` · Tarih: ${{ steps.info.outputs.date }} · Boyut: ${{ steps.info.outputs.size }}
           - BIOS ve UEFI ile açılır (hibrit ISO); USB belleğe doğrudan yazılabilir.
 
           ### QEMU ile çalıştır
           \`\`\`sh
-          qemu-system-x86_64 -m 4G -smp 2 -cdrom axsos.iso -nic user,model=e1000 -device virtio-tablet-pci -device virtio-keyboard-pci
+          qemu-img create -f qcow2 veri.qcow2 20G   # bir kez: kalıcı depolama diski
+          qemu-system-x86_64 -m 4G -smp 2 -cdrom axsos.iso -drive file=veri.qcow2,if=virtio -boot d -nic user,model=e1000 -device virtio-tablet-pci -device virtio-keyboard-pci
           \`\`\`
           (Linux'ta \`-enable-kvm\` eklemek çok hızlandırır.)
 
           ### VirtualBox / VMware
-          Yeni sanal makine: Linux 64-bit, 4 GB bellek (tarayıcısız 2 GB yeter), disk gerekmez;
+          Yeni sanal makine: Linux 64-bit, 4 GB bellek (tarayıcısız 2 GB yeter), 20 GB disk (kalıcı depolama);
           ağ kartı: Intel PRO/1000 (varsayılan) ya da virtio. ISO'yu CD olarak takıp başlat.
 
           ### USB bellek

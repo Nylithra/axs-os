@@ -11,4 +11,9 @@ while [ $i -lt 8 ]; do
     sleep 0.5; i=$((i + 1))
 done
 [ -z "$a" ] && echo "[rc] Ağ: adres bekleniyor (arka planda DHCP sürüyor)"
+# Kalıcı depolama etkinse diskte takas dosyası (ilk açılışta oluşturulur; arka planda)
+if [ -f /run/axs-kalici ]; then
+    echo "[rc] Kalıcı depolama: $(cat /run/axs-kalici) -> /mnt/kalici"
+    /sbin/kalici takas >/dev/null 2>&1 &
+fi
 exit 0

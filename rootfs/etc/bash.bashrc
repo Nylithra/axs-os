@@ -64,6 +64,7 @@ _axpkg_complete() {
     esac
 }
 complete -F _axpkg_complete axpkg kur kaldir
+complete -W "durum diskler hazirla sifirla takas" kalici
 
 # --- bilinmeyen komut: depoda varsa hangi paketin kurulacağını söyle ---
 command_not_found_handle() {

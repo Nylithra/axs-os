@@ -36,6 +36,15 @@ echo TARAYICI-TEST-BITTI
 EOT
 sed -i "s/PORT/$PORT/" "$WEB/test.sh"
 
+# Kalıcı depolama diski: tarayıcılar diske kurulur, yeniden başlatınca kalmalı
+KD="$OUT/tarayici-veri.img"
+rm -f "$KD" && qemu-img create -q -f raw "$KD" 8G
+if [ -w /dev/kvm ]; then KB=35; else KB=90; fi
+DISK="$KD" RUN_MODE=iso BOOT_WAIT=$KB CMD_WAIT=10 scripts/qemu-test.sh 'kalici hazirla vda' 'poweroff' \
+    > "$OUT/tarayici-hazirla.log" 2>&1 || true
+grep -q "Hazır. Yeniden başlatınca" "$OUT/tarayici-hazirla.log" || { tail -30 "$OUT/tarayici-hazirla.log"; echo "[test] BAŞARISIZ: disk hazırlanamadı"; exit 1; }
+export DISK="$KD"
+
 python3 scripts/ci-web.py "$WEB" "$PORT" &
 WEBPID=$!
 LOG="$OUT/tarayici-seri.log"
@@ -62,8 +71,18 @@ if grep -q "FIREFOX-EKRAN-TAMAM" "$LOG"; then
         key:ret wait:240 "shot:$OUT/firefox-masaustu.png" >/dev/null 2>&1 || echo "[test] (masaüstü görüntüsü alınamadı)"
 fi
 
+# Yeniden başlat: Firefox kalıcı depolamada duruyor ve hâlâ açılıyor mu
+if grep -q "FIREFOX-EKRAN-TAMAM" "$LOG"; then
+    RUN_MODE=iso BOOT_WAIT=$KB CMD_WAIT=40 scripts/qemu-test.sh \
+        'kalici durum | head -1' \
+        'rm -f /root/İndirilenler/firefox2.png; /usr/lib/tarayici/tarayici-baslat --basliksiz firefox --headless --screenshot /home/axs/İndirilenler/firefox2.png https://example.com >/dev/null 2>&1; [ -s /root/İndirilenler/firefox2.png ] && echo FIREFOX-KALICI-TAMAM' \
+        'poweroff' >> "$LOG" 2>&1 || true
+fi
+
 sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' "$LOG" | grep -E "FIREFOX|CHROME|TARAYICI|HATA|kuruldu|sha256|tamam|BAŞARISIZ" || true
 ok=1
 grep -q "FIREFOX-EKRAN-TAMAM" "$LOG" && echo "[test] tamam: Firefox kuruldu ve sayfa açtı" || { echo "[test] BAŞARISIZ: Firefox"; ok=0; }
 grep -q "CHROME-EKRAN-TAMAM" "$LOG" && echo "[test] tamam: Chrome kuruldu ve sayfa açtı" || { echo "[test] BAŞARISIZ: Chrome"; ok=0; }
+grep -q "FIREFOX-KALICI-TAMAM" "$LOG" && echo "[test] tamam: Firefox yeniden başlatınca kurulu kaldı ve açıldı" || { echo "[test] BAŞARISIZ: Firefox kalıcı değil"; ok=0; }
 [ $ok = 1 ] || { tail -60 "$LOG"; exit 1; }
+rm -f "$KD"

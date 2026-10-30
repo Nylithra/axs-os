@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include <netinet/in.h>
+#include <sys/statvfs.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -20,11 +21,18 @@ typedef struct {
     Surf thumbs[N_WALLPAPERS];
     int thumb_accent;   /* önizlemeler hangi vurgu rengiyle üretildi */
     TextField test;
+    /* depolama sayfası */
+    struct { char name[32], model[64], state[16]; long long bytes; } disks[8];
+    int ndisks;
+    long disk_scan;      /* son tarama (ms) */
+    char confirm[32];    /* "sil ve kullan" için ikinci tıklama bekleyen disk */
+    int reset_confirm;
 } SetSt;
 
-static const char *PAGES[] = { "Görünüm", "Klavye", "Tarih ve saat", "Ağ", "Sistem" };
-static const IconId PAGE_IC[] = { IC_SETTINGS, IC_KEYBOARD, IC_CLOCK, IC_NETWORK, IC_CPU };
-#define N_PAGES 5
+static const char *PAGES[] = { "Görünüm", "Klavye", "Tarih ve saat", "Ağ", "Depolama", "Sistem" };
+static const IconId PAGE_IC[] = { IC_SETTINGS, IC_KEYBOARD, IC_CLOCK, IC_NETWORK, IC_SAVE, IC_CPU };
+#define N_PAGES 6
+#define PAGE_STORAGE 4
 
 static void make_thumbs(SetSt *st)
 {
@@ -37,11 +45,12 @@ static void make_thumbs(SetSt *st)
 
 static void s_init(Win *w, const char *arg)
 {
-    (void)arg;
     SetSt *st = calloc(1, sizeof *st);
     st->ui.cur_hot = -1;
     st->thumb_accent = -1;
     w->st = st;
+    if (arg && !strcmp(arg, "depolama"))
+        st->page = PAGE_STORAGE;
 }
 
 static void section(Surf *s, int x, int y, const char *t, const char *sub)
@@ -289,6 +298,150 @@ static void page_network(Surf *s, SetSt *st, UiState *u, Rect a)
                    "Kablosuz (Wi-Fi) kartlar henüz desteklenmiyor. Elle adres: terminalde \"ag sabit eth0 192.168.1.50/24 192.168.1.1\"");
 }
 
+static void human_size(char *out, size_t n, long long b)
+{
+    if (b >= 1000000000LL)
+        snprintf(out, n, "%.1f GB", b / 1e9);
+    else
+        snprintf(out, n, "%lld MB", b / 1000000LL);
+}
+
+static void scan_disks(SetSt *st)
+{
+    char out[2048] = "";
+    char *argv[] = { "/sbin/kalici", "diskler", NULL };
+    run_capture(argv, out, sizeof out);
+    st->ndisks = 0;
+    for (char *ln = strtok(out, "\n"); ln && st->ndisks < 8; ln = strtok(NULL, "\n")) {
+        char name[32], state[16];
+        long long b;
+        int off = 0;
+        if (sscanf(ln, "%31s %lld %15s %n", name, &b, state, &off) < 3)
+            continue;
+        snprintf(st->disks[st->ndisks].name, 32, "%s", name);
+        snprintf(st->disks[st->ndisks].state, 16, "%s", state);
+        snprintf(st->disks[st->ndisks].model, 64, "%s", off ? ln + off : "Disk");
+        st->disks[st->ndisks].bytes = b;
+        st->ndisks++;
+    }
+    st->disk_scan = now_ms();
+}
+
+/* Depolama: kalıcı depolama durumu, diskler, hazırlama, sıfırlama */
+static void page_storage(Surf *s, SetSt *st, UiState *u, Rect a)
+{
+    int y = a.y;
+    char dev[64] = "", buf[256];
+    int active = read_file("/run/axs-kalici", dev, sizeof dev) > 0;
+    dev[strcspn(dev, "\n")] = 0;
+    section(s, a.x, y, "Kalıcı depolama", "Kurulan uygulamalar, dosyalar ve ayarlar yeniden başlatınca korunsun");
+    y += 52;
+    Rect card = { a.x, y, a.w, active ? 150 : 92 };
+    fill_rrect(s, card, 14, T.surface2);
+    draw_icon(s, IC_SAVE, card.x + 18, card.y + 18, 36);
+    if (active) {
+        draw_text(s, F_UI_BOLD, 16, card.x + 70, card.y + 16, T.text, "Etkin");
+        ui_badge(s, card.x + 70 + text_width(F_UI_BOLD, 16, "Etkin") + 10, card.y + 17, dev, ALPHA(T.green, 50), T.green);
+        struct statvfs sv;
+        if (statvfs("/mnt/kalici", &sv) == 0) {
+            long long tot = (long long)sv.f_blocks * sv.f_frsize, fre = (long long)sv.f_bavail * sv.f_frsize;
+            char a1[32], a2[32];
+            human_size(a1, sizeof a1, tot - fre);
+            human_size(a2, sizeof a2, tot);
+            snprintf(buf, sizeof buf, "%s / %s kullanılıyor", a1, a2);
+            draw_text(s, F_UI, 13, card.x + 70, card.y + 44, T.subtext, buf);
+            ui_progress(s, (Rect){ card.x + 70, card.y + 68, card.w - 90, 8 }, tot ? (float)(tot - fre) / tot : 0, T.accent);
+        }
+        char sw[1024];
+        long swk = 0;
+        if (read_file("/proc/swaps", sw, sizeof sw) > 0 && strstr(sw, "takas")) {
+            char *l = strstr(sw, "takas");
+            sscanf(strchr(l, ' ') ? strchr(l, ' ') : l, " %*s %ld", &swk);
+        }
+        snprintf(buf, sizeof buf, "Disk: /mnt/kalici   •   Takas: %s", swk ? "" : "yok");
+        if (swk)
+            snprintf(buf, sizeof buf, "Disk: /mnt/kalici   •   Takas: %ld MB", swk / 1024);
+        draw_text(s, F_UI, 12, card.x + 70, card.y + 88, T.muted, buf);
+        int pending = access("/mnt/kalici/SIFIRLA", F_OK) == 0;
+        Rect b = { card.x + 70, card.y + 106, 230, 34 };
+        if (pending) {
+            draw_text(s, F_UI_BOLD, 12, b.x + 240, b.y + 9, T.red, "Yeniden başlatınca sıfırlanacak");
+            if (ui_button(s, u, b, "Sıfırlamayı iptal et", BTN_NORMAL)) {
+                char *argv[] = { "/sbin/kalici", "sifirla", "--iptal", NULL };
+                run_capture(argv, buf, sizeof buf);
+            }
+        } else if (ui_button(s, u, b, st->reset_confirm ? "Emin misin? Her şey silinir" : "Fabrika ayarlarına dön",
+                             BTN_DANGER)) {
+            if (st->reset_confirm) {
+                char *argv[] = { "/sbin/kalici", "sifirla", NULL };
+                run_capture(argv, buf, sizeof buf);
+                wm_notify("Kalıcı depolama", "Yeniden başlatınca tüm değişiklikler silinecek", IC_SAVE);
+                st->reset_confirm = 0;
+            } else {
+                st->reset_confirm = 1;
+            }
+        }
+        y += card.h + 18;
+        draw_text_wrap(s, F_UI, 12, a.x, y, a.w, 3, 17, T.muted,
+                       "Sistem ISO'dan salt okunur açılır; yaptığın her değişiklik bu diske yazılır. "
+                       "Fabrika ayarlarına dönmek yalnızca diskteki değişiklikleri siler.");
+        return;
+    }
+    draw_text(s, F_UI_BOLD, 16, card.x + 70, card.y + 16, T.yellow, "Kapalı — canlı kip");
+    draw_text_wrap(s, F_UI, 13, card.x + 70, card.y + 44, card.w - 90, 2, 18, T.subtext,
+                   "Şu an her şey bellekte; yeniden başlatınca kurduğun uygulamalar ve dosyalar silinir. "
+                   "Aşağıdan bir disk seçip kalıcı depolamayı aç.");
+    y += card.h + 20;
+    if (!st->disk_scan || now_ms() - st->disk_scan > 4000)
+        scan_disks(st);
+    draw_text(s, F_UI_BOLD, 13, a.x, y, T.subtext, "DİSKLER");
+    y += 24;
+    int need_reboot = 0;
+    for (int i = 0; i < st->ndisks && y < a.y + a.h - 60; i++) {
+        Rect r = { a.x, y, a.w, 58 };
+        fill_rrect(s, r, 12, T.surface);
+        char sz[32];
+        human_size(sz, sizeof sz, st->disks[i].bytes);
+        snprintf(buf, sizeof buf, "%s  •  %s", st->disks[i].name, sz);
+        draw_text(s, F_UI_BOLD, 14, r.x + 14, r.y + 10, T.text, buf);
+        draw_text_fit(s, F_UI, 12, r.x + 14, r.y + 32, r.w - 250, T.muted, st->disks[i].model);
+        Rect b = { r.x + r.w - 214, r.y + 12, 200, 34 };
+        const char *stt = st->disks[i].state;
+        char cmd[160];
+        if (!strcmp(stt, "axsos")) {
+            need_reboot = 1;
+            ui_badge(s, b.x - 4, b.y + 8, "Hazır — yeniden başlat", ALPHA(T.green, 50), T.green);
+        } else if (!strcmp(stt, "bos")) {
+            if (ui_button(s, u, b, "Kalıcı depolama yap", BTN_PRIMARY)) {
+                snprintf(cmd, sizeof cmd, "kalici hazirla %s", st->disks[i].name);
+                wm_run_in_terminal(cmd, "Kalıcı depolama");
+                st->disk_scan = 0;
+            }
+        } else {
+            int c = !strcmp(st->confirm, st->disks[i].name);
+            if (ui_button(s, u, b, c ? "Emin misin? Disk silinecek" : "Sil ve kullan", BTN_DANGER)) {
+                if (c) {
+                    snprintf(cmd, sizeof cmd, "kalici hazirla %s --evet", st->disks[i].name);
+                    wm_run_in_terminal(cmd, "Kalıcı depolama");
+                    st->confirm[0] = 0;
+                    st->disk_scan = 0;
+                } else {
+                    snprintf(st->confirm, sizeof st->confirm, "%s", st->disks[i].name);
+                }
+            }
+        }
+        y += 66;
+    }
+    if (!st->ndisks)
+        draw_text_wrap(s, F_UI, 13, a.x, y, a.w, 4, 18, T.subtext,
+                       "Disk bulunamadı. Sanal makineye bir disk ekle; ör. QEMU: qemu-img create -f qcow2 "
+                       "veri.qcow2 20G, sonra -drive file=veri.qcow2,if=virtio");
+    if (need_reboot && ui_button(s, u, (Rect){ a.x, y + 6, 190, 38 }, "Şimdi yeniden başlat", BTN_PRIMARY)) {
+        char *argv[] = { "reboot", NULL };
+        spawn_bg(argv);
+    }
+}
+
 static void page_system(Surf *s, SetSt *st, UiState *u, Rect a)
 {
     (void)st;
@@ -360,7 +513,8 @@ static void s_draw(Win *w, Surf *s)
     case 1: page_keyboard(s, st, u, a); break;
     case 2: page_time(s, st, u, a); break;
     case 3: page_network(s, st, u, a); break;
-    case 4: page_system(s, st, u, a); break;
+    case 4: page_storage(s, st, u, a); break;
+    case 5: page_system(s, st, u, a); break;
     }
     s->clip = old;
 }
@@ -384,7 +538,7 @@ static void s_tick(Win *w)
 {
     SetSt *st = w->st;
     static int n;
-    if ((st->page == 2 || st->page == 3 || st->page == 4) && ++n % 4 == 0) /* saniyede bir */
+    if ((st->page >= 2) && ++n % 4 == 0) /* saniyede bir */
         w->dirty = 1;
 }
 
@@ -397,7 +551,7 @@ static void s_close(Win *w)
 }
 
 const App APP_SETTINGS = {
-    .id = "ayarlar", .name = "Ayarlar", .desc = "Görünüm, klavye, saat, ağ",
+    .id = "ayarlar", .name = "Ayarlar", .desc = "Görünüm, klavye, saat, ağ, depolama",
     .icon = IC_SETTINGS, .w = 760, .h = 520, .single = 1,
     .init = s_init, .draw = s_draw, .mouse = s_mouse, .key = s_key, .tick = s_tick, .close = s_close,
 };

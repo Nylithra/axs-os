@@ -5,7 +5,8 @@ yazdığım **Axs** programlama dilidir ([Nylithra/axs](https://github.com/Nylit
 Kullanıcı alanı; kendi init'im (C), varsayılan kabuk GNU `bash` (kendi kabuğum `axsh` de var),
 Axs yorumlayıcısı (`axs`), paket yöneticisi (`axpkg`, internetten paket indirir) ve kendi masaüstü
 ortamım **AxsDE** üzerine kuruludur. Gerçek ağ kartı sürücüleriyle internete bağlanır; Firefox ve
-Chrome kurulu gelmez, paket yöneticisinden indirilir.
+Chrome kurulu gelmez, paket yöneticisinden indirilir. **Kalıcı depolama**: ISO'dan açılır, bir disk
+takılıysa kurulan uygulamalar, dosyalar ve ayarlar o diske yazılır ve yeniden başlatınca korunur.
 Tek komutla derlenir; QEMU'da ve BIOS/UEFI ile açılan bir ISO olarak çalışır.
 
 ## Ortam
@@ -36,6 +37,8 @@ Tek komutla derlenir; QEMU'da ve BIOS/UEFI ile açılan bir ISO olarak çalış�
 | `./run.sh iso-uefi` | ISO'yu GRUB ile açar (UEFI/OVMF). |
 | `TIMEOUT=30 ./run.sh` | 30 sn sonra QEMU'yu kapatır. |
 | `VERBOSE=1 ./run.sh` | Kernel mesajlarını göster (`quiet` kapalı). |
+| `DISK=yol ./run.sh` | Kalıcı depolama diski (varsayılan `build/veri.qcow2`, 20 GB, yoksa oluşturulur; `TIMEOUT` verilen testlerde disk yok; `DISK=none` disksiz). |
+| `scripts/ci-kalici-test.sh` | Kalıcı depolama testi: aynı diskle 4 açılış (hazırla → dosya + paket → korundu mu → fabrika ayarları). |
 | `APPEND="..." ./run.sh` / `MEM=4G ./run.sh` | Ek kernel parametresi / bellek (varsayılan metin 512M, masaüstü 2G; tarayıcı için 3-4G). |
 | `scripts/qemu-test.sh "cmd1" "cmd2"` | Otomatik test (metin): açar, komutları yazar, çıktıyı gösterir. `RUN_MODE=iso`, `BOOT_WAIT=20`, `CMD_WAIT=3` |
 | `scripts/ci-test.sh` | ISO açılış testi: metin kipinde axs/python/axpkg/poweroff ve masaüstü ekran görüntüsü (CI da bunu çalıştırır). |
@@ -76,6 +79,7 @@ tarayici/                 Tarayıcı paketleri: tarayici-baslat (chroot + Xvfb +
 scripts/repo-index.sh     Depo INDEX'i üretir (MANIFEST + sha256 + boyut + komutlar + simgeler)
 scripts/ci-tarayici-test.sh, ci-web.py   Tarayıcı uçtan uca testi ve test HTTP sunucusu
 rootfs/sbin/ag            Ağ yöneticisi (DHCP, durum, test, sabit adres)
+rootfs/sbin/kalici        Kalıcı depolama aracı (durum, diskler, hazirla, sifirla, takas)
 scripts/novnc-server.py   Tarayıcı kipi: noVNC + WebSocket↔VNC köprüsü (tek port)
 scripts/qemu-gui.py       Masaüstü test aracı (QMP ile tıklama/yazma/ekran görüntüsü)
 pkgs/<ad>/                Terminal paketleri (MANIFEST + files/) → /var/lib/axpkg/repo/*.axp
@@ -89,7 +93,7 @@ build/                    (git'e girmez)
   stb/, fonts/            stb (truetype, image, image_write) ve yazı tipleri (Inter, JetBrains Mono)
   apps/, pkgs/, icons/    apps aşaması: libaxsapp nesneleri, uygulama paket dizinleri, simgeler
   novnc/                  noVNC istemcisi (yalnızca ./run.sh gui tarayıcı kipinde)
-  shell/                  bash, ncurses, nano, curl kaynakları ve derlemeleri
+  shell/                  bash, ncurses, nano, curl, e2fsprogs kaynakları ve derlemeleri
   tarayici/rootfs/        tarayıcı çalışma ortamı (Ubuntu minbase + kütüphaneler; ~240 MB)
   uzak-depo/              uzak depo: INDEX, *.axp, icon-*.png (CI "paketler" sürümüne yükler)
   sysroot/                bizim programlarımız + python + axs (initramfs'e eklenir)
@@ -103,12 +107,23 @@ build/                    (git'e girmez)
   devtmpfs, ACPI poweroff, klavye, USB klavye/fare). ~2.9 MB. Ağ kartları: e1000 (QEMU,
   VirtualBox, VMware), e1000e/igb/igc (Intel), r8169/8139 (Realtek), pcnet32, vmxnet3, virtio-net;
   IPv4+IPv6. glibc programları için SysV IPC, POSIX mq, inotify, seccomp, ad alanları (tarayıcı
-  korumalı alanları). Wi-Fi yok.
+  korumalı alanları). Diskler: virtio-blk/scsi, SATA AHCI, IDE (PIIX), NVMe, SCSI (LSI, PVSCSI),
+  USB bellek; ext4, overlayfs, takas, FAT/ISO9660 (USB, CD). Wi-Fi yok.
 - **libc**: tüm kullanıcı alanı **musl** ile **statik** derlenir (`build/tools/axs-cc`).
   Paylaşımlı kütüphane yok; `/lib` yok.
 - **initramfs**: kernel'in `gen_init_cpio` aracıyla üretilir (root yetkisi gerekmez).
   Birleştirme sırası: BusyBox → `build/sysroot` → `rootfs/` (sonraki öncekinin üzerine yazar).
-  Kök dosya sistemi tmpfs'tir; init sınırı belleğin %90'ına çıkarır (kurulan paketler RAM'de).
+  Kök dosya sistemi tmpfs'tir; init sınırı belleğin %90'ına çıkarır (canlı kipte paketler RAM'de).
+- **Kalıcı depolama** (`init.c` `kalici_baslat`, `/sbin/kalici`): init önce proc/sys/dev bağlar ve
+  `AXSOS-VERI` etiketli ext4 aygıtı arar (süper blok etiketi; bütün disk, bölüm tablosu yok). Bulursa
+  `e2fsck -p`, `/.kalici`'ye bağlar, `SIFIRLA` dosyası varsa üst katmanı siler (fabrika ayarları),
+  `overlay(lowerdir=/ [initramfs], upperdir=disk/sistem/ust, workdir=disk/sistem/is)` kurar, proc/sys/dev
+  ve diski (`/mnt/kalici`) içine taşır, `mount --move` + `chroot` ile yeni köke geçer (switch_root gibi
+  ama alt katman silinmez). `/run/axs-kalici` aygıt adını içerir. Kapanışta takas kapatılır, disk salt
+  okunur yapılır. `axs.kalici=0` ya da GRUB "canlı kip" ile kapatılır. `kalici hazirla <disk>` boş diski
+  (doluysa `--evet`) `mke2fs -t ext4 -L AXSOS-VERI` ile hazırlar; `/etc/rc` diskte takas dosyası açar
+  (≤ 2 GB). Ayarlar > Depolama: durum, kullanım, takas, disk listesi, "Kalıcı depolama yap",
+  "Fabrika ayarlarına dön", yeniden başlat; Hoş Geldin'de Depolama kartı ve boş disk bildirimi.
 - **init** (`/sbin/init`, `/init` → `sbin/init`): proc/sys/dev/devpts/dev/shm/tmp/run bağlar,
   hostname `axsos`, `/etc/rc` (ağ), her etkin konsolda (`/sys/class/tty/console/active`)
   logo + oturum kabuğu (`/bin/bash`, yoksa axsh, yoksa sh) başlatır ve yeniden açar.
@@ -201,14 +216,14 @@ build/                    (git'e girmez)
     `apps.c`'deki `apps_scan()` içine `add_builtin` ekle (istersen `wm.c`'de `DOCK`'a da).
   - init, ekran konsolunda (tty1) framebuffer varsa shell yerine axsde başlatır;
     `axs.gui=0` çekirdek parametresi ya da güç menüsündeki "Metin konsoluna geç" ile kapatılır.
-  - Ayarlar `/etc/axsde.conf` (RAM'de; yeniden başlatınca sıfırlanır). Varsayılan saat dilimi UTC+3.
-- **ISO**: `grub-mkrescue` ile BIOS+UEFI hibrit. Menü: masaüstü (varsayılan),
-  metin kipi, ayrıntılı, kurtarma (`rdinit=/bin/sh`). Konsol hem ekran (`tty0`) hem seri (`ttyS0`).
+  - Ayarlar `/etc/axsde.conf` (kalıcı depolama açıksa korunur). Varsayılan saat dilimi UTC+3.
+- **ISO**: `grub-mkrescue` ile BIOS+UEFI hibrit. Menü: masaüstü (varsayılan), canlı kip
+  (kalıcı depolamasız), metin kipi, ayrıntılı, kurtarma (`rdinit=/bin/sh`). Konsol hem ekran (`tty0`) hem seri (`ttyS0`).
 
 ## GitHub Actions (`.github/workflows/build.yml`)
 
 Her push'ta: `./build.sh deps` → `./build.sh` → `scripts/ci-test.sh` (ISO QEMU'da açılıp test
-edilir; başarısızsa yayın yapılmaz) → `sudo ./build.sh tarayici` → `scripts/ci-tarayici-test.sh`
+edilir; başarısızsa yayın yapılmaz) → `scripts/ci-kalici-test.sh` → `sudo ./build.sh tarayici` → `scripts/ci-tarayici-test.sh`
 (ISO'da Firefox ve Chrome internetten kurulup sayfa açar) → artifact (ISO, SHA256SUMS,
 ekran görüntüleri, seri günlükler) → **`paketler`** sürümüne uzak depo (INDEX, .axp, simgeler)
 yüklenir → **Releases'te `son-surum`** ön sürümü güncellenir. `v*` etiketi gönderilince
@@ -227,7 +242,7 @@ JetBrains/JetBrainsMono, novnc/noVNC). Yazı tipleri seyrek klonla tek dosya ola
 
 - Aşamalar: 1) kernel 2) BusyBox + initramfs 3) C init 4) axsh 5) axs dili
   6) axpkg 7) bootable ISO 8) AxsDE masaüstü 9) Uygulama Marketi + uygulamalar
-  10) bash + gerçek ağ + uzak depo + Firefox/Chrome. Hepsi tamamlandı.
+  10) bash + gerçek ağ + uzak depo + Firefox/Chrome 11) kalıcı depolama. Hepsi tamamlandı.
 - Masaüstü değişikliklerini `scripts/qemu-gui.py` ile ekran görüntüsü alarak doğrula.
 - Her değişiklikten sonra QEMU'da test et (`scripts/qemu-test.sh`), git commit at.
 - Her şey `./build.sh` ve `./run.sh` ile yeniden üretilebilir kalmalı; elle adım yok.

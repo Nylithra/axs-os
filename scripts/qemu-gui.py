@@ -126,6 +126,9 @@ def main():
             "-qmp", "unix:%s,server,nowait" % sock, "-serial", "file:%s/serial.log" % tmp,
             "-nic", "user,model=e1000", "-device", "virtio-tablet-pci", "-device", "virtio-keyboard-pci",
             "-no-reboot"]
+    disk = os.environ.get("DISK", "")
+    if disk and disk != "none":  # kalıcı depolama diski (test için)
+        qemu += ["-drive", "file=%s,if=virtio,format=%s" % (disk, "qcow2" if disk.endswith(".qcow2") else "raw")]
     if os.path.exists("/dev/kvm") and os.access("/dev/kvm", os.W_OK):
         qemu += ["-enable-kvm", "-cpu", "host"]
     else:

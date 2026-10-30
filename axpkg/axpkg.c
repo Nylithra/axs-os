@@ -1011,16 +1011,21 @@ static int install_one(const char *arg, int force, int depth)
     if (!have_ix)
         return fail("'%s' paketi bulunamadı. Depo dizinini yenilemek için: axpkg update", arg);
     if (ie.min_ram && !force) { /* hiçbir şey indirmeden önce denetle */
+        /* bellek + takas (kalıcı depolamada diskte takas dosyası olur) */
         FILE *mf = fopen("/proc/meminfo", "r");
-        long kb = 0;
-        if (mf) {
-            if (fscanf(mf, "MemTotal: %ld", &kb) != 1)
-                kb = 0;
-            fclose(mf);
+        long kb = 0, sw = 0;
+        char ln[128];
+        while (mf && fgets(ln, sizeof ln, mf)) {
+            sscanf(ln, "MemTotal: %ld", &kb);
+            sscanf(ln, "SwapTotal: %ld", &sw);
         }
+        if (mf)
+            fclose(mf);
+        kb += sw;
         if (kb && kb / 1024 < ie.min_ram - 64) /* çekirdeğin ayırdığı payı tolere et */
-            return fail("%s en az %ld MB bellek ister, bu makinede %ld MB var. AxsOS her şeyi RAM'de tutar: "
-                        "sanal makineye daha çok bellek verin (QEMU: -m 4G). Yine de denemek için: axpkg install -f %s",
+            return fail("%s en az %ld MB bellek ister, bu makinede %ld MB var (bellek + takas). Sanal makineye daha "
+                        "çok bellek verin (QEMU: -m 4G) ya da kalıcı depolamayı açın (takas). Yine de denemek için: "
+                        "axpkg install -f %s",
                         ie.name, ie.min_ram, kb / 1024, ie.name);
     }
     if (download_pkg(&ie, path, sizeof path) != 0)

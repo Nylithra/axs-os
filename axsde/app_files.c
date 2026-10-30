@@ -33,6 +33,9 @@ typedef struct {
 
 static const struct { const char *name; const char *path; IconId ic; } PLACES[] = {
     { "Ev", "/root", IC_HOME },
+    { "İndirilenler", "/root/İndirilenler", IC_FOLDER },
+    { "Resimler", "/root/Resimler", IC_FOLDER },
+    { "Kalıcı disk", "/mnt/kalici", IC_SAVE },
     { "Axs örnekleri", "/usr/lib/axs/examples", IC_STUDIO },
     { "Axs belgeleri", "/usr/lib/axs/docs", IC_FILE },
     { "Paket deposu", "/var/lib/axpkg/repo", IC_PACKAGE },
@@ -179,8 +182,10 @@ static void f_draw(Win *w, Surf *s)
     fill_rect(s, (Rect){ 0, 0, SIDE_W, H }, T.base);
     fill_rect(s, (Rect){ SIDE_W - 1, 0, 1, H }, T.border);
     draw_text(s, F_UI_BOLD, 11, 18, 16, T.muted, "YERLER");
-    for (int i = 0; i < N_PLACES; i++) {
-        Rect r = { 8, 38 + i * 36, SIDE_W - 16, 32 };
+    for (int i = 0, row = 0; i < N_PLACES; i++) {
+        if (i > 0 && access(PLACES[i].path, F_OK) != 0)
+            continue; /* yalnızca var olan yerler (ör. kalıcı disk etkinse) */
+        Rect r = { 8, 38 + row++ * 36, SIDE_W - 16, 32 };
         int cur = !strcmp(st->cwd, PLACES[i].path);
         int hov = ui_hover(u, r);
         if (cur)

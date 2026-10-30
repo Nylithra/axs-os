@@ -1,6 +1,10 @@
 /*
  * AxsOS init (PID 1)
  *
+ * - kalıcı depolama: "AXSOS-VERI" etiketli ext4 disk varsa (e2fsck ile denetleyip)
+ *   kök dizinin üzerine overlay kurar: alt katman ISO'daki sistem (salt okunur, RAM),
+ *   üst katman disk. Kurulan paketler, dosyalar, ayarlar yeniden başlatınca korunur.
+ *   Disk /mnt/kalici'de görünür. axs.kalici=0 ile kapatılır.
  * - /proc, /sys, /dev, /dev/pts, /tmp, /run bağlar
  * - hostname'i "axsos" yapar
  * - AxsOS açılış logosunu basar
@@ -24,8 +28,10 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mount.h>
+#include <dirent.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
+#include <sys/swap.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <time.h>
@@ -40,7 +46,7 @@ static const char *SHELLS[] = { "/bin/bash", "/bin/axsh", "/bin/sh", NULL };
 #define DESKTOP  "/usr/bin/axsde"
 
 static struct {
-    char dev[64];
+    char dev[300];
     pid_t pid;
     time_t last_spawn;
     int gui;        /* bu konsolda masaüstü çalışsın */
@@ -50,6 +56,10 @@ static struct {
 static int nttys;
 
 static volatile sig_atomic_t shutdown_req; /* 0 veya RB_* komutu */
+
+#define KALICI_ETIKET "AXSOS-VERI"
+#define KALICI_YER    "/mnt/kalici"
+static char kalici_dev[300];   /* etkinse kalıcı depolama aygıtı */
 
 static void msg(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void msg(const char *fmt, ...)
@@ -67,15 +77,152 @@ static void do_mount(const char *src, const char *dst, const char *type,
                      unsigned long flags, const char *data)
 {
     mkdir(dst, 0755);
+    /* zaten bağlıysa (kalıcı depolama aşamasında taşındıysa) tekrar bağlama */
+    char parent[128];
+    snprintf(parent, sizeof parent, "%s/..", dst);
+    struct stat a, b;
+    if (stat(dst, &a) == 0 && stat(parent, &b) == 0 && a.st_dev != b.st_dev)
+        return;
     if (mount(src, dst, type, flags, data) < 0 && errno != EBUSY)
         msg("UYARI: %s bağlanamadı: %s", dst, strerror(errno));
+}
+
+static int cmdline_has(const char *opt)
+{
+    char cmd[1024] = "";
+    FILE *f = fopen("/proc/cmdline", "r");
+    if (!f)
+        return 0;
+    if (!fgets(cmd, sizeof cmd, f))
+        cmd[0] = 0;
+    fclose(f);
+    size_t n = strlen(opt);
+    for (char *p = cmd; (p = strstr(p, opt)); p += n)
+        if ((p == cmd || p[-1] == ' ') && (p[n] == ' ' || p[n] == '\n' || p[n] == 0))
+            return 1;
+    return 0;
+}
+
+/* ext2/3/4 süper bloğundaki etiket (aygıt ext değilse -1) */
+static int ext_label(const char *dev, char *label, size_t n)
+{
+    int fd = open(dev, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return -1;
+    unsigned char sb[256];
+    ssize_t k = pread(fd, sb, sizeof sb, 1024);
+    close(fd);
+    if (k != (ssize_t)sizeof sb || sb[0x38] != 0x53 || sb[0x39] != 0xEF)
+        return -1;
+    snprintf(label, n, "%.16s", (const char *)sb + 0x78);
+    return 0;
+}
+
+static int find_kalici(char *out, size_t n)
+{
+    DIR *d = opendir("/sys/class/block");
+    struct dirent *e;
+    int found = 0;
+    while (d && !found && (e = readdir(d))) {
+        const char *nm = e->d_name;
+        if (nm[0] == '.' || !strncmp(nm, "loop", 4) || !strncmp(nm, "ram", 3) || !strncmp(nm, "zram", 4) ||
+            !strncmp(nm, "sr", 2) || !strncmp(nm, "fd", 2))
+            continue;
+        char dev[300], label[32];
+        snprintf(dev, sizeof dev, "/dev/%s", nm);
+        if (ext_label(dev, label, sizeof label) == 0 && !strcmp(label, KALICI_ETIKET)) {
+            snprintf(out, n, "%s", dev);
+            found = 1;
+        }
+    }
+    if (d)
+        closedir(d);
+    return found;
+}
+
+static int run_wait(char *const argv[])
+{
+    pid_t pid = fork();
+    if (pid == 0) {
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    int st = 0;
+    while (pid > 0 && waitpid(pid, &st, 0) < 0 && errno == EINTR)
+        ;
+    return pid > 0 && WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+/* Kalıcı depolama: overlay kökü kur ve içine geç. Başarısızsa canlı (RAM) kipte devam eder. */
+static void kalici_baslat(void)
+{
+    mkdir("/proc", 0755);
+    mkdir("/sys", 0755);
+    mkdir("/dev", 0755);
+    mount("proc", "/proc", "proc", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL);
+    mount("sysfs", "/sys", "sysfs", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL);
+    mount("devtmpfs", "/dev", "devtmpfs", MS_NOSUID, "mode=0755");
+    if (cmdline_has("axs.kalici=0"))
+        return;
+    char dev[300];
+    int found = 0;
+    for (int i = 0; i < 10 && !(found = find_kalici(dev, sizeof dev)); i++)
+        usleep(100000); /* USB/SATA diskler biraz geç görünebilir */
+    if (!found)
+        return;
+    msg("Kalıcı depolama: %s", dev);
+    if (access("/sbin/e2fsck", X_OK) == 0) {
+        char *fsck[] = { "/sbin/e2fsck", "-p", dev, NULL };
+        int r = run_wait(fsck);
+        if (r >= 4)
+            msg("UYARI: %s üzerinde düzeltilemeyen dosya sistemi hataları var (e2fsck %d)", dev, r);
+    }
+    mkdir("/.kalici", 0755);
+    if (mount(dev, "/.kalici", "ext4", MS_NOATIME, NULL) < 0) {
+        msg("UYARI: %s bağlanamadı (%s); canlı kipte devam ediliyor", dev, strerror(errno));
+        return;
+    }
+    if (access("/.kalici/SIFIRLA", F_OK) == 0) { /* fabrika ayarlarına dönüş istendi */
+        msg("Kalıcı depolama sıfırlanıyor (tüm değişiklikler siliniyor)...");
+        char *rm[] = { "/bin/rm", "-rf", "/.kalici/sistem", NULL };
+        run_wait(rm);
+        unlink("/.kalici/SIFIRLA");
+    }
+    mkdir("/.kalici/sistem", 0755);
+    mkdir("/.kalici/sistem/ust", 0755);
+    mkdir("/.kalici/sistem/is", 0755);
+    mkdir("/.yeni", 0755);
+    if (mount("overlay", "/.yeni", "overlay", 0,
+              "lowerdir=/,upperdir=/.kalici/sistem/ust,workdir=/.kalici/sistem/is") < 0) {
+        msg("UYARI: overlay kurulamadı (%s); canlı kipte devam ediliyor", strerror(errno));
+        umount("/.kalici");
+        return;
+    }
+    static const char *MOVE[] = { "/proc", "/sys", "/dev" };
+    for (int i = 0; i < 3; i++) {
+        char to[64];
+        snprintf(to, sizeof to, "/.yeni%s", MOVE[i]);
+        mkdir(to, 0755);
+        mount(MOVE[i], to, NULL, MS_MOVE, NULL);
+    }
+    mkdir("/.yeni/mnt", 0755);
+    mkdir("/.yeni" KALICI_YER, 0755);
+    mount("/.kalici", "/.yeni" KALICI_YER, NULL, MS_MOVE, NULL);
+    /* yeni köke geç (switch_root gibi, ama alt katman olan initramfs silinmez) */
+    if (chdir("/.yeni") == 0 && mount(".", "/", NULL, MS_MOVE, NULL) == 0 && chroot(".") == 0) {
+        if (chdir("/") < 0) { /* yok say */ }
+        snprintf(kalici_dev, sizeof kalici_dev, "%s", dev);
+    } else {
+        msg("UYARI: kalıcı köke geçilemedi (%s)", strerror(errno));
+    }
 }
 
 static void mount_all(void)
 {
     /* Kök dosya sistemi (initramfs, tmpfs) varsayılan olarak belleğin yarısıyla sınırlı;
      * büyük paketler (tarayıcılar) için sınırı yükselt. */
-    mount("rootfs", "/", NULL, MS_REMOUNT, "size=90%");
+    if (!kalici_dev[0])
+        mount("rootfs", "/", NULL, MS_REMOUNT, "size=90%");
     do_mount("proc", "/proc", "proc", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL);
     do_mount("sysfs", "/sys", "sysfs", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL);
     do_mount("devtmpfs", "/dev", "devtmpfs", MS_NOSUID, "mode=0755");
@@ -292,6 +439,14 @@ static void shutdown_system(int how)
     sync();
     umount2("/tmp", MNT_DETACH);
     umount2("/run", MNT_DETACH);
+    if (kalici_dev[0]) {
+        /* takası kapat, diski salt okunur yap: güç kesilse bile tutarlı kalsın */
+        swapoff(KALICI_YER "/takas");
+        sync();
+        if (mount(NULL, KALICI_YER, NULL, MS_REMOUNT | MS_RDONLY, NULL) < 0)
+            msg("UYARI: kalıcı disk salt okunur yapılamadı (%s); veriler yazıldı (sync)", strerror(errno));
+        sync();
+    }
     reboot(how);
     /* reboot başarısız olursa sonsuza kadar bekle (PID 1 çıkmamalı). */
     for (;;)
@@ -304,7 +459,15 @@ int main(void)
         fprintf(stderr, "init: yalnızca PID 1 olarak çalışır\n");
         return 1;
     }
+    kalici_baslat();
     mount_all();
+    if (kalici_dev[0]) { /* masaüstü ve araçlar için: kalıcı depolama etkin */
+        FILE *f = fopen("/run/axs-kalici", "w");
+        if (f) {
+            fprintf(f, "%s\n", kalici_dev);
+            fclose(f);
+        }
+    }
     setup_console();
     setup_signals();
     default_env();

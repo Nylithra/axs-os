@@ -91,15 +91,45 @@ if [ ! -x "$SH/curl" ]; then
         || die "curl derlenemedi"
 fi
 
+# --- e2fsprogs: kalıcı depolama diski (mkfs.ext4, e2fsck, resize2fs, tune2fs) ---
+if [ ! -x "$SH/e2fs/mke2fs" ]; then
+    E2="$SH/e2fsprogs-$E2FS_VER"
+    if [ ! -d "$E2" ]; then
+        if ! ( fetch "$E2" "https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v$E2FS_VER/e2fsprogs-$E2FS_VER.tar.gz" ) 2>/dev/null; then
+            log "kernel.org erişilemedi, GitHub aynasından (tytso/e2fsprogs) klonlanıyor..."
+            rm -rf "$E2.part"
+            git -c advice.detachedHead=false clone -q --depth 1 --branch "v$E2FS_VER" \
+                https://github.com/tytso/e2fsprogs "$E2.part" && mv "$E2.part" "$E2" || die "e2fsprogs indirilemedi"
+        fi
+    fi
+    log "e2fsprogs derleniyor..."
+    ( cd "$E2" && CC="$CC" CFLAGS="-O2" LDFLAGS="-static" ./configure --prefix=/usr \
+        --disable-nls --disable-fuse2fs --disable-debugfs --disable-imager --disable-defrag \
+        --disable-uuidd --disable-e2initrd-helper --disable-tdb --disable-bmap-stats \
+        --without-libarchive --disable-elf-shlibs >/dev/null \
+      && make -j"$JOBS" libs >/dev/null && make -j"$JOBS" -C misc mke2fs tune2fs >/dev/null \
+      && make -j"$JOBS" -C e2fsck e2fsck >/dev/null && make -j"$JOBS" -C resize resize2fs >/dev/null ) \
+        || die "e2fsprogs derlenemedi"
+    mkdir -p "$SH/e2fs"
+    cp "$E2/misc/mke2fs" "$E2/misc/tune2fs" "$E2/e2fsck/e2fsck" "$E2/resize/resize2fs" "$SH/e2fs/"
+fi
+
 log "Kuruluyor..."
 install -m755 "$SH/bash" "$SYS/bin/bash"
 install -m755 "$SH/nano" "$SYS/usr/bin/nano"
 install -m755 "$SH/curl" "$SYS/usr/bin/curl"
 strip "$SYS/bin/bash" "$SYS/usr/bin/nano" "$SYS/usr/bin/curl"
+mkdir -p "$SYS/sbin"
+for b in mke2fs tune2fs e2fsck resize2fs; do
+    install -m755 "$SH/e2fs/$b" "$SYS/sbin/$b"
+    strip "$SYS/sbin/$b"
+done
+ln -sf mke2fs "$SYS/sbin/mkfs.ext4"
+ln -sf e2fsck "$SYS/sbin/fsck.ext4"
 # CA sertifikaları (HTTPS için; derleme makinesinin Mozilla kök sertifika listesi)
 CA=/etc/ssl/certs/ca-certificates.crt
 [ -f "$CA" ] || die "$CA yok (ca-certificates paketini kurun)"
 mkdir -p "$SYS/etc/ssl/certs"
 cp "$CA" "$SYS/etc/ssl/certs/ca-certificates.crt"
 ln -sf certs/ca-certificates.crt "$SYS/etc/ssl/cert.pem"
-log "Hazır: bash $BASH_VER, nano $NANO_VER, curl $CURL_VER (+ $(grep -c 'BEGIN CERT' "$CA") kök sertifika)"
+log "Hazır: bash $BASH_VER, nano $NANO_VER, curl $CURL_VER, e2fsprogs $E2FS_VER (+ $(grep -c 'BEGIN CERT' "$CA") kök sertifika)"

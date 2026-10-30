@@ -11,6 +11,8 @@ typedef struct {
     char kernel[64], cpu[96], mem[48], axs[64];
     Proc axsp;
     int welcome;
+    char disk[64];  /* kalıcı depolama durumu */
+    int disk_off;   /* kapalı: tıklayınca Ayarlar > Depolama */
 } AboutSt;
 
 static void a_init(Win *w, const char *arg)
@@ -37,6 +39,21 @@ static void a_init(Win *w, const char *arg)
         long kb = 0;
         sscanf(buf, "MemTotal: %ld", &kb);
         fmt_size(st->mem, sizeof st->mem, (long long)kb * 1024);
+    }
+    /* Kalıcı depolama durumu; kapalıysa ve boş disk varsa öner */
+    char kd[64] = "";
+    if (read_file("/run/axs-kalici", kd, sizeof kd) > 0) {
+        kd[strcspn(kd, "\n")] = 0;
+        snprintf(st->disk, sizeof st->disk, "Kalıcı (%s)", kd);
+    } else {
+        snprintf(st->disk, sizeof st->disk, "Kapalı — aç");
+        st->disk_off = 1;
+        char out[1024] = "";
+        char *argv[] = { "/sbin/kalici", "diskler", NULL };
+        if (st->welcome && run_capture(argv, out, sizeof out) == 0 && (strstr(out, " bos ") || strstr(out, " axsos ")))
+            wm_notify("Kalıcı depolama kapalı", strstr(out, " axsos ") ? "Disk hazır: etkinleştirmek için yeniden başlat"
+                      : "Boş bir disk bulundu. Ayarlar > Depolama'dan tek tıkla aç; uygulamaların ve dosyaların kalıcı olsun.",
+                      IC_SAVE);
     }
     /* Axs sürümünü kaynak dosyasından oku (python başlatmak yavaş makinede saniyeler sürer) */
     snprintf(st->axs, sizeof st->axs, "bulunamadı");
@@ -90,13 +107,15 @@ static void a_draw(Win *w, Surf *s)
     draw_text(s, F_UI, 15, 158, 88, ALPHA(HEX(0xFFFFFF), 210), "Axs dilinin evi — Linux üzerinde, sıfırdan yazılmış bir sistem.");
     ui_badge(s, 158, 118, "AxsDE " AXSDE_VERSION, ALPHA(HEX(0xFFFFFF), 40), HEX(0xFFFFFF));
     ui_badge(s, 158 + 96, 118, st->kernel, ALPHA(HEX(0xFFFFFF), 40), HEX(0xFFFFFF));
+    ui_badge(s, 158 + 96 + text_width(F_UI_BOLD, 11, st->kernel) + 26, 118, st->axs, ALPHA(HEX(0xFFFFFF), 40),
+             HEX(0xFFFFFF));
 
     /* bilgi satırları */
     int y = 190;
     struct { IconId ic; const char *k; const char *v; } rows[] = {
         { IC_CPU, "İşlemci", st->cpu },
         { IC_MEMORY, "Bellek", st->mem },
-        { IC_STUDIO, "Axs", st->axs },
+        { IC_SAVE, "Depolama", st->disk },
     };
     for (int i = 0; i < 3; i++) {
         int cw3 = (W - 72 - 24) / 3;
@@ -104,7 +123,10 @@ static void a_draw(Win *w, Surf *s)
         fill_rrect(s, r, 12, T.base);
         draw_icon(s, rows[i].ic, r.x + 12, r.y + 17, 28);
         draw_text(s, F_UI, 11, r.x + 50, r.y + 12, T.muted, rows[i].k);
-        draw_text_fit(s, F_UI_BOLD, 13, r.x + 50, r.y + 31, r.w - 60, T.text, rows[i].v);
+        draw_text_fit(s, F_UI_BOLD, 13, r.x + 50, r.y + 31, r.w - 60, i == 2 && st->disk_off ? T.yellow : T.text,
+                      rows[i].v);
+        if (i == 2 && ui_clicked(u, r)) /* depolama kartı: Ayarlar > Depolama */
+            wm_open(&APP_SETTINGS, "depolama");
     }
 
     y += 84;
