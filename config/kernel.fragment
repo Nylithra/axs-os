@@ -186,3 +186,9 @@ CONFIG_NLS_ISO8859_1=y
 CONFIG_NLS_UTF8=y
 CONFIG_ISO9660_FS=y
 CONFIG_JOLIET=y
+
+# WTA (Wine): 32 bit Windows programları (wow64) LDT ile 32 bit kod kesimi kurar;
+# 16 bit programlar için X86_16BIT
+CONFIG_MODIFY_LDT_SYSCALL=y
+CONFIG_IA32_EMULATION=y
+CONFIG_X86_16BIT=y

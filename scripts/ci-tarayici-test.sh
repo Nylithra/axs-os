@@ -40,7 +40,13 @@ axpkg install google-chrome && echo CHROME-KURULDU
 axpkg install wta && echo WTA-KURULDU
 wta surum
 for b in 64 32; do
-    curl -fs -o /root/İndirilenler/merhaba$b.exe "$H/merhaba$b.exe" && wta --basliksiz /root/İndirilenler/merhaba$b.exe
+    if curl -fs -o /root/İndirilenler/merhaba$b.exe "$H/merhaba$b.exe"; then
+        WINEDEBUG=err+all wta --basliksiz /root/İndirilenler/merhaba$b.exe > /tmp/wta-$b.log 2>&1
+        echo "WTA-$b-KOD=$?"
+        tr -cd '\11\12\40-\176' < /tmp/wta-$b.log | tail -15
+    else
+        echo "WTA-$b-INDIRILEMEDI"
+    fi
 done
 wta --basliksiz cmd /c echo WTA-CMD-TAMAM
 free -m
@@ -104,10 +110,12 @@ ok=1
 grep -q "FIREFOX-EKRAN-TAMAM" "$LOG" && echo "[test] tamam: Firefox kuruldu ve sayfa açtı" || { echo "[test] BAŞARISIZ: Firefox"; ok=0; }
 grep -q "CHROME-EKRAN-TAMAM" "$LOG" && echo "[test] tamam: Chrome kuruldu ve sayfa açtı" || { echo "[test] BAŞARISIZ: Chrome"; ok=0; }
 grep -q "FIREFOX-KALICI-TAMAM" "$LOG" && echo "[test] tamam: Firefox yeniden başlatınca kurulu kaldı ve açıldı" || { echo "[test] BAŞARISIZ: Firefox kalıcı değil"; ok=0; }
-grep -q "WTA-CMD-TAMAM" "$LOG" && echo "[test] tamam: WTA (Wine) kuruldu, Windows komut istemi çalıştı" || { echo "[test] BAŞARISIZ: WTA"; ok=0; }
+TEMIZ="$OUT/tarayici-seri-temiz.log"
+sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\r//g' "$LOG" > "$TEMIZ"
+grep -q "WTA-CMD-TAMAM" "$TEMIZ" && echo "[test] tamam: WTA (Wine) kuruldu, Windows komut istemi çalıştı" || { echo "[test] BAŞARISIZ: WTA"; ok=0; }
 if [ -f "$WEB/merhaba32.exe" ]; then
     for b in 64 32; do
-        grep -q "WTA-$b-BIT-TAMAM" "$LOG" && echo "[test] tamam: $b bit Windows programı çalıştı" || { echo "[test] BAŞARISIZ: WTA $b bit"; ok=0; }
+        grep -q "WTA-$b-BIT-TAMAM" "$TEMIZ" && echo "[test] tamam: $b bit Windows programı çalıştı" || { echo "[test] BAŞARISIZ: WTA $b bit"; ok=0; }
     done
 fi
 [ $ok = 1 ] || { tail -60 "$LOG"; exit 1; }
