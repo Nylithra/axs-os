@@ -115,15 +115,28 @@ void axsapp_close(void)
     sock = -1;
 }
 
+static int watch_fd = -1;
+static void (*watch_cb)(void);
+
+void axsapp_watch_fd(int fd, void (*cb)(void))
+{
+    watch_fd = fd;
+    watch_cb = cb;
+}
+
 int axsapp_next(AxsEvent *ev, int timeout_ms)
 {
     memset(ev, 0, sizeof *ev);
-    struct pollfd p = { sock, POLLIN, 0 };
-    int r = poll(&p, 1, timeout_ms);
+    struct pollfd p[2] = { { sock, POLLIN, 0 }, { watch_fd, POLLIN, 0 } };
+    int r = poll(p, watch_fd >= 0 ? 2 : 1, timeout_ms);
     if (r == 0)
         return 0;
     if (r < 0)
         return errno == EINTR ? 0 : -1;
+    if (watch_fd >= 0 && (p[1].revents & (POLLIN | POLLHUP | POLLERR)) && watch_cb)
+        watch_cb();
+    if (!(p[0].revents & (POLLIN | POLLHUP | POLLERR)))
+        return 0;
     AdpMsg m;
     if (recv_msg(&m) < 0)
         return -1;

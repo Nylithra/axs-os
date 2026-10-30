@@ -40,6 +40,7 @@ int   axsapp_next(AxsEvent *ev, int timeout_ms); /* 1 olay, 0 zaman aşımı, -1
 int   axsapp_focused(void);
 int   axsapp_fd(void);
 void  axsapp_close(void);
+void  axsapp_watch_fd(int fd, void (*cb)(void)); /* fd hazır olunca cb (ör. stdin) */
 
 /* Kolay döngü */
 typedef struct {

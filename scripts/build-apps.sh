@@ -71,6 +71,12 @@ done
     || die "derlenemedi: xkopru"
 strip "$W/xkopru"
 
+# arayuz: kolay arayüz sunucusu (Axs "use arayuz"); sistemin parçası, market paketi değil
+"$CC" -static "${CFLAGS[@]}" -o "$W/arayuz" "$ROOT/apps/arayuz/main.c" ${LIBOBJ[@]} -lm \
+    || die "derlenemedi: arayuz"
+strip "$W/arayuz"
+install -D -m755 "$W/arayuz" "$BUILD/sysroot/usr/bin/arayuz"
+
 # Resim Görüntüleyici örnek resimlerle gelir
 if [ -d "$PK/resim-gorucu" ]; then
     S="$PK/resim-gorucu/files/usr/share/axsde/ornek-resimler"

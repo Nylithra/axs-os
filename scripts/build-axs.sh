@@ -28,10 +28,21 @@ mkdir -p "$DEST"
 for f in axs axslang axsweb kutuphaneler examples docs README.md LICENSE; do
     [ -e "$SRC/$f" ] && cp -a "$SRC/$f" "$DEST/"
 done
+# AxsOS ekleri: kolay arayüz kütüphanesi ("use arayuz"), belgesi ve örnekleri
+cp "$ROOT/axs-ek/axsarayuz.py" "$DEST/"
+cp "$ROOT/axs-ek/arayuz.md" "$DEST/docs/arayuz.md"
+mkdir -p "$DEST/examples/arayuz"
+cp "$ROOT"/axs-ek/ornekler/*.axs "$DEST/examples/arayuz/"
+grep -q '^DIS_KUTUPHANELER = ' "$DEST/axslang/lib/__init__.py" || die "Axs: DIS_KUTUPHANELER bulunamadı"
+cat >> "$DEST/axslang/lib/__init__.py" <<'EOP'
+
+# AxsOS: masaüstü kolay arayüz kütüphanesi (/usr/lib/axs/axsarayuz.py)
+DIS_KUTUPHANELER.update({"arayuz": "axsarayuz", "pencere": "axsarayuz", "gui": "axsarayuz"})
+EOP
 find "$DEST" -name __pycache__ -prune -exec rm -rf {} +
 chmod +x "$DEST/axs"
 # Bayt kodunu önceden derle (açılışta yazma gerekmesin)
-"$PYI/usr/bin/python3" -m compileall -q -d /usr/lib/axs "$DEST/axslang" "$DEST/axsweb" >/dev/null
+"$PYI/usr/bin/python3" -m compileall -q -d /usr/lib/axs "$DEST/axslang" "$DEST/axsweb" "$DEST/axsarayuz.py" >/dev/null
 ln -sf ../lib/axs/axs "$SYS/usr/bin/axs"
 ln -sf python3 "$SYS/usr/bin/python"
 echo "$(git -C "$SRC" rev-parse --short HEAD)" > "$DEST/.surum"

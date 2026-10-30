@@ -198,8 +198,13 @@ static void handle(Client *c, AdpMsg *m)
         break;
     }
     case ADP_TITLE:
-        if (c->win)
+        if (c->win) {
             wm_set_title(c->win, m->text);
+            if (!c->win->entry) {   /* kayıtsız uygulama (ör. Axs arayüz programı): adı başlığıdır */
+                snprintf(c->win->app_name, sizeof c->win->app_name, "%s", m->text);
+                wm_damage_all();
+            }
+        }
         break;
     case ADP_COMMIT:
         commit(c, (Rect){ m->a, m->b, m->c, m->d });
