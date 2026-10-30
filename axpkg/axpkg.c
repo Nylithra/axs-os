@@ -572,6 +572,22 @@ static int run_capture_line(char *const argv[], char *out, size_t n)
     return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
+/* curl çıkış kodunu anlaşılır nedene çevir */
+static const char *curl_reason(int rc)
+{
+    switch (rc) {
+    case 6: return "sunucunun adı çözülemedi (DNS). İnternet bağlantısını denetleyin: ag test";
+    case 7: return "sunucuya bağlanılamadı. İnternet bağlantısını denetleyin: ag test";
+    case 28: return "bağlantı zaman aşımına uğradı (ağ çok yavaş ya da engelli): ag test";
+    case 35: case 60: case 77:
+        return "güvenli bağlantı (TLS) kurulamadı; sistem saati yanlış olabilir (date) ya da ağ HTTPS'i engelliyor";
+    case 22: return "sunucu dosyayı vermedi (HTTP hatası); depo güncel değil olabilir: axpkg update";
+    case 23: return "diske yazılamadı (yer dolu olabilir: df -h /)";
+    case 56: return "bağlantı yarıda kesildi; yeniden deneyin";
+    default: return "İnternet bağlantısını denetleyin: ag test";
+    }
+}
+
 /* Uzak paketi önbelleğe indir, sha256'yı doğrula. 0 = tamam */
 /* Kök dosya sisteminde boş yer (MB); canlı sistemde bu RAM'dir */
 static long free_mb(void)
@@ -608,9 +624,10 @@ static int download_pkg(const IndexEnt *e, char *path, size_t n)
     fflush(stdout);
     char *argv[] = { "curl", "-fL", "--retry", "3", "--connect-timeout", "20",
                      (isatty(1) || getenv("AXPKG_PROGRESS")) ? "--progress-bar" : "-sS", "-o", part, url, NULL };
-    if (run(argv) != 0) {
+    int rc = run(argv);
+    if (rc != 0) {
         unlink(part);
-        return fail("%s indirilemedi. İnternet bağlantısını denetleyin: ag test", e->name);
+        return fail("%s indirilemedi: %s", e->name, curl_reason(rc));
     }
     if (e->sha256[0]) {
         char out[256];
@@ -689,8 +706,9 @@ static int cmd_update(void)
         snprintf(url, sizeof url, "%s/INDEX", u);
         info("Depo: %s", u);
         char *argv[] = { "curl", "-fsSL", "--retry", "2", "--connect-timeout", "15", "-o", ip, url, NULL };
-        if (run(argv) != 0) {
-            fprintf(stderr, C_ERR "  erişilemedi" C_OFF " (internet bağlantısı? ag test)\n");
+        int rc = run(argv);
+        if (rc != 0) {
+            fprintf(stderr, C_ERR "  erişilemedi" C_OFF ": %s\n", curl_reason(rc));
             unlink(ip);
             continue;
         }

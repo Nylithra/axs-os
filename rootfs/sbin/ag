@@ -23,7 +23,15 @@ baslat)
     [ -s /etc/resolv.conf ] || echo "nameserver 1.1.1.1" > /etc/resolv.conf
     for c in $(cards); do dhcp_start "$c"; done
     # saat: ağdan eşitle (HTTPS sertifikaları doğru saat ister); arka planda, açılışı bekletmez
-    ( sleep 2; ntpd -n -q -p pool.ntp.org -p time.google.com >/dev/null 2>&1 ) &
+    # NTP (UDP 123) engelliyse saati bir web sunucusunun "Date" başlığından al
+    ( sleep 2
+      if ! timeout 25 ntpd -n -q -p pool.ntp.org -p time.google.com >/dev/null 2>&1; then
+          for u in http://www.google.com http://github.com; do
+              d=$(curl -sI --max-time 10 "$u" | tr -d '\r' | sed -n 's/^[Dd]ate: [A-Za-z]*, //p' | head -1)
+              # "30 Oct 2026 18:19:28 GMT" -> date -u -D ile
+              [ -n "$d" ] && date -u -D '%d %b %Y %H:%M:%S' -s "${d% GMT}" >/dev/null 2>&1 && break
+          done
+      fi ) &
     ;;
 yenile)
     if [ -n "${2:-}" ]; then dhcp_start "$2"; else for c in $(cards); do dhcp_start "$c"; done; fi

@@ -11,10 +11,18 @@ case "$1" in
             ip route del default dev "$interface" 2>/dev/null
             ip route add default via "${router%% *}" dev "$interface"
         fi
-        if [ -n "$dns" ]; then
+        # DNS: DHCP'nin verdiği + yedekler (Cloudflare, Google). musl hepsine aynı anda sorar,
+        # ilk yanıtı kullanır: sanal makinenin DNS aktarıcısı bozuksa (ör. Windows'ta QEMU +
+        # VPN / çok ağ kartı) indirmeler yine çalışır. musl en fazla 3 sunucu kullanır.
+        if true; then
             : > /etc/resolv.conf.new
             [ -n "$domain" ] && echo "search $domain" >> /etc/resolv.conf.new
-            for d in $dns; do echo "nameserver $d" >> /etc/resolv.conf.new; done
+            n=0
+            for d in $dns 1.1.1.1 8.8.8.8; do
+                [ $n -lt 3 ] || break
+                grep -q "^nameserver $d\$" /etc/resolv.conf.new && continue
+                echo "nameserver $d" >> /etc/resolv.conf.new; n=$((n + 1))
+            done
             mv /etc/resolv.conf.new /etc/resolv.conf
             # tarayıcı çalışma ortamı (chroot) da yeni DNS'i görsün
             [ -d /opt/tarayici/etc ] && cp /etc/resolv.conf /opt/tarayici/etc/resolv.conf

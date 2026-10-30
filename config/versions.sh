@@ -23,3 +23,7 @@ REMOTE_REPO=https://github.com/Nylithra/axs-os/releases/download/paketler
 TARAYICI_UBUNTU=noble        # Ubuntu 24.04 LTS kütüphaneleri (glibc, GTK, X)
 TARAYICI_ORTAM_VER=1.1       # tarayici-ortami paket sürümü
 E2FS_VER=1.47.3              # e2fsprogs: kalıcı depolama diski için mkfs.ext4 / e2fsck
+
+# Hazır kurulu araçlar (Ubuntu paketleri + glibc çalışma zamanı; scripts/build-araclar.sh)
+ARACLAR_UBUNTU=noble
+ARACLAR_PAKETLER="gcc make binutils libc6-dev vim htop iproute2 iputils-ping tar gzip bzip2 libc-bin"

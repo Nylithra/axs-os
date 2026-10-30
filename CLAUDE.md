@@ -26,7 +26,7 @@ Tek komutla derlenir; QEMU'da ve BIOS/UEFI ile açılan bir ISO olarak çalış�
 | Komut | Açıklama |
 |---|---|
 | `./build.sh` | Her şeyi sırayla derler (indirme dahil). İlk derleme ~8 dk (4 çekirdek), sonrakiler artımlı (~25 sn). |
-| `./build.sh <aşama>` | Tek aşama: `kernel busybox init axsh python axs shell axsde apps axpkg initramfs iso` |
+| `./build.sh <aşama>` | Tek aşama: `kernel busybox init axsh python axs shell araclar axsde apps axpkg initramfs iso` |
 | `sudo ./build.sh tarayici` | Uzak depo paketleri: `tarayici-ortami` (Ubuntu kütüphaneleri + Xvfb + xkopru), `firefox`, `google-chrome`, `wta` → `build/uzak-depo/` (debootstrap + root ister; `./build.sh`'e dahil değil, CI yapar). |
 | `./build.sh deps` | Eksik derleme paketlerini kurar (sudo apt-get). |
 | `AXSOS_BUILD=/yol ./build.sh` | Derleme klasörünü değiştirir (`run.sh` de aynı değişkeni okur). |
@@ -47,7 +47,7 @@ Tek komutla derlenir; QEMU'da ve BIOS/UEFI ile açılan bir ISO olarak çalış�
 | `scripts/qemu-gui.py wait:32 click:454,753 shot:/tmp/a.png` | Otomatik test (masaüstü): görüntüsüz QEMU + QMP; `click/dbl/drag/move/wheel/key/type/shot/wait`. `--iso` ile ISO'dan. Ekran 1280x800. |
 
 Aşama bağımlılıkları: `busybox/init/axsh/axpkg/axsde/python` → kernel başlıkları (`kernel`);
-`axs` → `python`; `shell` → `python` (statik OpenSSL/zlib); `apps` → `axsde` (stb + yazı tipleri);
+`axs` → `python`; `shell` → `python` (statik OpenSSL/zlib); `araclar` → yalnızca internet (archive.ubuntu.com); `apps` → `axsde` (stb + yazı tipleri);
 `axpkg` → `apps` (depoya paketler); `tarayici` → `apps` (xkopru) + `axpkg`;
 `initramfs` → hepsi; `iso` → `kernel` + `initramfs`.
 Bir market uygulamasını değiştirince: `./build.sh apps && ./build.sh axpkg && ./build.sh initramfs`.
@@ -81,6 +81,7 @@ axsde/desktop.c, fileops.c  Masaüstü simgeleri (~/Masaüstü) ve ortak dosya i
 tarayici/                 Uzak depo paketleri: tarayici-baslat (chroot + Xvfb + xkopru), firefox/, google-chrome/,
                           wta/ (Windows programları: Wine)
 tests/wta/merhaba.c       WTA CI testi (mingw ile 32/64 bit .exe)
+scripts/build-araclar.sh, deb-coz.py  Hazır araçlar: Ubuntu paketleri (bağımlılık çözücü) + glibc çalışma zamanı
 scripts/repo-index.sh     Depo INDEX'i üretir (MANIFEST + sha256 + boyut + komutlar + simgeler)
 scripts/ci-tarayici-test.sh, ci-web.py   Tarayıcı uçtan uca testi ve test HTTP sunucusu
 rootfs/sbin/ag            Ağ yöneticisi (DHCP, durum, test, sabit adres)
@@ -114,8 +115,13 @@ build/                    (git'e girmez)
   IPv4+IPv6. glibc programları için SysV IPC, POSIX mq, inotify, seccomp, ad alanları (tarayıcı
   korumalı alanları). Diskler: virtio-blk/scsi, SATA AHCI, IDE (PIIX), NVMe, SCSI (LSI, PVSCSI),
   USB bellek; ext4, overlayfs, takas, FAT/ISO9660 (USB, CD). Wi-Fi yok.
-- **libc**: tüm kullanıcı alanı **musl** ile **statik** derlenir (`build/tools/axs-cc`).
-  Paylaşımlı kütüphane yok; `/lib` yok.
+- **libc**: AxsOS'un kendi programları **musl** ile **statik** derlenir (`build/tools/axs-cc`).
+  **Hazır araçlar** (`araclar` aşaması): gcc 13, make, binutils (as, ld, ar...), vim, htop,
+  iproute2 (`ip`), iputils `ping`, GNU tar, gzip, bzip2 Ubuntu noble paketlerinden (sha256
+  doğrulamalı, `config/versions.sh` `ARACLAR_PAKETLER`) glibc çalışma zamanıyla gelir:
+  `/lib64/ld-linux-x86-64.so.2`, `/usr/lib/x86_64-linux-gnu`, `ld.so.cache` (`/lib`, `/lib64` →
+  `usr/...`). gcc'nin derlediği programlar doğrudan çalışır (`-static` da olur). LTO, sanitizer,
+  gold, belgeler çıkarılır (~140 MB). `/usr/bin` PATH'te `/bin`'den (BusyBox) öndedir.
 - **initramfs**: kernel'in `gen_init_cpio` aracıyla üretilir (root yetkisi gerekmez).
   Birleştirme sırası: BusyBox → `build/sysroot` → `rootfs/` (sonraki öncekinin üzerine yazar).
   Kök dosya sistemi tmpfs'tir; init sınırı belleğin %90'ına çıkarır (canlı kipte paketler RAM'de).
@@ -133,8 +139,10 @@ build/                    (git'e girmez)
   hostname `axsos`, `/etc/rc` (ağ), her etkin konsolda (`/sys/class/tty/console/active`)
   logo + oturum kabuğu (`/bin/bash`, yoksa axsh, yoksa sh) başlatır ve yeniden açar.
 - **Ağ** (`/sbin/ag`, `/etc/rc`, `/etc/udhcpc.script`): açılışta tüm gerçek kartlar açılır,
-  `udhcpc` arka planda DHCP ile adres/rota/DNS alır ve kirayı yeniler; saat `ntpd` ile
-  eşitlenir (HTTPS için). `ag durum|yenile|test|sabit <kart> <ip/önek> <geçit> [dns]`.
+  `udhcpc` arka planda DHCP ile adres/rota/DNS alır ve kirayı yeniler; resolv.conf'a DHCP DNS'inin
+  yanına 1.1.1.1 ve 8.8.8.8 eklenir (musl hepsine aynı anda sorar; QEMU'nun DNS aktarıcısı
+  bozuksa da çalışır). Saat `ntpd` ile, NTP engelliyse HTTP `Date` başlığından eşitlenir (HTTPS
+  için). axpkg indirme hatasının nedenini söyler (DNS, zaman aşımı, TLS/saat, HTTP). `ag durum|yenile|test|sabit <kart> <ip/önek> <geçit> [dns]`.
   Ayarlar > Ağ: kartlar (sürücü, bağlantı, MAC, IPv4, hız), ağ geçidi, DNS, yeniden bağlan.
 - **Kabuk**: GNU bash 5.2 (statik, musl; readline, iş kontrolü `fg/bg/jobs`, tamamlama).
   `/etc/profile` + `/etc/bash.bashrc`: renkli istem (hata kodu), geçmiş, takma adlar

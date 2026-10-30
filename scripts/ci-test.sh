@@ -21,6 +21,8 @@ RUN_MODE=iso BOOT_WAIT=$BOOT CMD_WAIT=10 scripts/qemu-test.sh \
     'axs -e "print: AxsOS CI (6 * 7);"' \
     'axpkg available | grep -c axp; axpkg list' \
     'python3 -c "import ssl, sqlite3, zlib; print(\"python-ok\")"' \
+    'cd /tmp; printf "#include <stdio.h>\nint main(void){puts(\"gcc-\" \"ok\");return 0;}\n" > t.c && gcc -o t t.c && ./t; cd' \
+    'for t in make ld as ar vim htop ip ping tar gzip bzip2 curl nano busybox; do command -v $t >/dev/null || echo "arac-yok:$t"; done; echo araclar-bitti' \
     'poweroff' > "$OUT/test-seri.log" 2>&1 || true
 
 grep -q "Linux version\|GNU GRUB\|AxsOS" "$OUT/test-seri.log" || fail "açılış çıktısı yok (bkz. $OUT/test-seri.log)"
@@ -28,6 +30,11 @@ grep -q "AxsOS CI 42" "$OUT/test-seri.log" || { tail -40 "$OUT/test-seri.log"; f
 ok "axs çalışıyor"
 grep -q "python-ok" "$OUT/test-seri.log" || { tail -40 "$OUT/test-seri.log"; fail "python (ssl/sqlite3/zlib) çalışmadı"; }
 ok "python + ssl + sqlite3 + zlib"
+grep -q "^gcc-ok" "$OUT/test-seri.log" || { tail -40 "$OUT/test-seri.log"; fail "gcc ile derlenen program çalışmadı"; }
+ok "gcc derliyor, program çalışıyor"
+grep -q "araclar-bitti" "$OUT/test-seri.log" && ! grep -q "arac-yok:[a-z]" "$OUT/test-seri.log" \
+    || { grep "arac-yok:[a-z]" "$OUT/test-seri.log"; fail "hazır araçlar eksik"; }
+ok "make, binutils, vim, htop, ip, ping, tar, gzip, bzip2, curl, nano, busybox kurulu"
 grep -q "hesap-makinesi" "$OUT/test-seri.log" || { tail -40 "$OUT/test-seri.log"; fail "hazır kurulu market uygulamaları yok"; }
 ok "market deposu ve hazır kurulu uygulamalar"
 grep -q "Power down\|Sistem kapatılıyor" "$OUT/test-seri.log" || fail "poweroff çalışmadı"
