@@ -29,10 +29,11 @@ typedef struct {
     int reset_confirm;
 } SetSt;
 
-static const char *PAGES[] = { "Görünüm", "Klavye", "Tarih ve saat", "Ağ", "Depolama", "Sistem" };
-static const IconId PAGE_IC[] = { IC_SETTINGS, IC_KEYBOARD, IC_CLOCK, IC_NETWORK, IC_SAVE, IC_CPU };
-#define N_PAGES 6
-#define PAGE_STORAGE 4
+static const char *PAGES[] = { "Hesap", "Görünüm", "Klavye", "Tarih ve saat", "Ağ", "Depolama", "Sistem" };
+static const IconId PAGE_IC[] = { IC_ABOUT, IC_SETTINGS, IC_KEYBOARD, IC_CLOCK, IC_NETWORK, IC_SAVE, IC_CPU };
+#define N_PAGES 7
+#define PAGE_ACCOUNT 0
+#define PAGE_STORAGE 5
 
 static void make_thumbs(SetSt *st)
 {
@@ -49,8 +50,11 @@ static void s_init(Win *w, const char *arg)
     st->ui.cur_hot = -1;
     st->thumb_accent = -1;
     w->st = st;
+    st->page = 1;   /* Görünüm */
     if (arg && !strcmp(arg, "depolama"))
         st->page = PAGE_STORAGE;
+    else if (arg && !strcmp(arg, "hesap"))
+        st->page = PAGE_ACCOUNT;
 }
 
 static void section(Surf *s, int x, int y, const char *t, const char *sub)
@@ -482,6 +486,92 @@ static void page_system(Surf *s, SetSt *st, UiState *u, Rect a)
         wm_quit(0);
 }
 
+/* ---- Hesap ---- */
+static char pw_old[512], pw_new[512];
+
+static void pw_step3(const char *t, int id)
+{
+    (void)id;
+    if (!t)
+        return;
+    if (strcmp(t, pw_new)) {
+        wm_notify("Parola değişmedi", "Yeni parolalar aynı değil", IC_ABOUT);
+    } else if (login_set_password(pw_old, pw_new) < 0) {
+        wm_notify("Parola değişmedi", "Şu anki parola yanlış", IC_ABOUT);
+    } else {
+        wm_notify("Parola değiştirildi", "Giriş ve kilit ekranında yeni parolanı kullan", IC_ABOUT);
+    }
+    memset(pw_old, 0, sizeof pw_old);
+    memset(pw_new, 0, sizeof pw_new);
+}
+
+static void pw_step2(const char *t, int id)
+{
+    if (!t)
+        return;
+    if (strlen(t) < 4) {
+        wm_notify("Parola değişmedi", "Parola en az 4 karakter olmalı", IC_ABOUT);
+        return;
+    }
+    snprintf(pw_new, sizeof pw_new, "%s", t);
+    wm_prompt("Parolayı değiştir", "Yeni parolayı yeniden yaz:", "", "Değiştir", 2, pw_step3, id);
+}
+
+static void pw_step1(const char *t, int id)
+{
+    if (!t)
+        return;
+    snprintf(pw_old, sizeof pw_old, "%s", t);
+    wm_prompt("Parolayı değiştir", "Yeni parola (en az 4 karakter):", "", "İleri", 2, pw_step2, id);
+}
+
+static void name_done(const char *t, int id)
+{
+    (void)id;
+    if (!t || !t[0] || strchr(t, ':'))
+        return;
+    if (login_set_name(t) == 0)
+        wm_notify("Ad değiştirildi", t, IC_ABOUT);
+}
+
+static void page_account(Surf *s, SetSt *st, UiState *u, Rect a)
+{
+    (void)st;
+    section(s, a.x, a.y, "Hesap", "Bu bilgisayardaki kullanıcı hesabın (yönetici yetkili)");
+    int y = a.y + 64;
+    if (!login_has_account()) {
+        draw_text_wrap(s, F_UI, 14, a.x, y, a.w, 3, 20, T.subtext,
+                       "Henüz hesap yok (canlı kipte hesapsız devam edildi). Hesap oluşturunca açılışta ve kilit "
+                       "ekranında parola sorulur. Kalıcı depolama kapalıysa hesap yeniden başlatınca silinir.");
+        if (ui_button(s, u, (Rect){ a.x, y + 76, 180, 40 }, "Hesap oluştur", BTN_PRIMARY))
+            login_new_account();
+        return;
+    }
+    Rect c = { a.x, y, a.w, 104 };
+    fill_rrect(s, c, 14, T.base);
+    fill_circle(s, c.x + 52, c.y + 52, 34, T.accent);
+    char ini[8];
+    const char *n = login_fullname(), *q = n;
+    utf8_next(&q);
+    snprintf(ini, sizeof ini, "%.*s", (int)(q - n), n);
+    draw_text_center(s, F_UI_BOLD, 26, (Rect){ c.x + 18, c.y + 18, 68, 68 }, HEX(0xFFFFFF), ini);
+    draw_text(s, F_UI_BOLD, 18, c.x + 104, c.y + 28, T.text, login_fullname());
+    char line[96];
+    snprintf(line, sizeof line, "%s  •  yönetici", login_user());
+    draw_text(s, F_UI, 13, c.x + 104, c.y + 58, T.subtext, line);
+    y += 124;
+    if (ui_button(s, u, (Rect){ a.x, y, 170, 40 }, "Adı değiştir", BTN_NORMAL))
+        wm_prompt("Adı değiştir", "Görünen ad:", login_fullname(), "Kaydet", 1, name_done, 0);
+    if (ui_button(s, u, (Rect){ a.x + 180, y, 190, 40 }, "Parolayı değiştir", BTN_NORMAL))
+        wm_prompt("Parolayı değiştir", "Şu anki parola:", "", "İleri", 2, pw_step1, 0);
+    if (ui_button(s, u, (Rect){ a.x + 380, y, 150, 40 }, "Kilitle", BTN_NORMAL))
+        login_lock();
+    y += 64;
+    draw_text_wrap(s, F_UI, 13, a.x, y, a.w, 4, 19, T.muted,
+                   "Ekranı kilitlemek için Super+L ya da güç menüsünde \"Kilitle\". Aynı parola terminalde "
+                   "su ve login için de geçerlidir. Parolayı terminalden değiştirmek için: passwd");
+}
+
 static void s_draw(Win *w, Surf *s)
 {
     SetSt *st = w->st;
@@ -509,12 +599,13 @@ static void s_draw(Win *w, Surf *s)
     Rect old = s->clip;
     surf_clip(s, (Rect){ side.w, 0, s->w - side.w, s->h });
     switch (st->page) {
-    case 0: page_look(s, st, u, a); break;
-    case 1: page_keyboard(s, st, u, a); break;
-    case 2: page_time(s, st, u, a); break;
-    case 3: page_network(s, st, u, a); break;
-    case 4: page_storage(s, st, u, a); break;
-    case 5: page_system(s, st, u, a); break;
+    case 0: page_account(s, st, u, a); break;
+    case 1: page_look(s, st, u, a); break;
+    case 2: page_keyboard(s, st, u, a); break;
+    case 3: page_time(s, st, u, a); break;
+    case 4: page_network(s, st, u, a); break;
+    case 5: page_storage(s, st, u, a); break;
+    case 6: page_system(s, st, u, a); break;
     }
     s->clip = old;
 }
@@ -530,7 +621,7 @@ static void s_mouse(Win *w, MouseEv *e)
 static void s_key(Win *w, KeyEv *e)
 {
     SetSt *st = w->st;
-    if (st->page == 1 && st->test.focus && tf_key(&st->test, e))
+    if (st->page == 2 && st->test.focus && tf_key(&st->test, e))
         w->dirty = 1;
 }
 

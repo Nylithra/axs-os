@@ -84,7 +84,7 @@ cp "$WEB"/yukari/*.png "$OUT/" 2>/dev/null || true
 if grep -q "FIREFOX-EKRAN-TAMAM" "$LOG"; then
     echo "[test] masaüstünde Firefox ekran görüntüsü alınıyor..."
     GW=$([ -w /dev/kvm ] && echo 45 || echo 120)
-    MEM="${MEM:-4G}" timeout 900 scripts/qemu-gui.py --iso "wait:$GW" click:1210,17 key:ctrl-alt-t wait:3 \
+    MEM="${MEM:-4G}" timeout 900 scripts/qemu-gui.py --iso "wait:$GW" "oturum:Deneme,test1234" wait:3 click:1210,17 key:ctrl-alt-t wait:3 \
         "type:echo http://10.0.2.2:$PORT > /etc/axpkg/depolar; axpkg update; axpkg install firefox && firefox https://example.com &" \
         key:ret wait:240 "shot:$OUT/firefox-masaustu.png" >/dev/null 2>&1 || echo "[test] (masaüstü görüntüsü alınamadı)"
 fi
@@ -93,7 +93,7 @@ fi
 if grep -q "WTA-CMD-TAMAM" "$LOG"; then
     echo "[test] masaüstünde WTA ekran görüntüsü alınıyor..."
     GW=$([ -w /dev/kvm ] && echo 45 || echo 120)
-    MEM="${MEM:-4G}" timeout 600 scripts/qemu-gui.py --iso "wait:$GW" click:1210,17 key:ctrl-alt-t wait:3 \
+    MEM="${MEM:-4G}" timeout 600 scripts/qemu-gui.py --iso "wait:$GW" "oturum:Deneme,test1234" wait:3 click:1210,17 key:ctrl-alt-t wait:3 \
         "type:wta notepad" key:ret wait:60 "shot:$OUT/wta-masaustu.png" >/dev/null 2>&1 || echo "[test] (WTA görüntüsü alınamadı)"
 fi
 

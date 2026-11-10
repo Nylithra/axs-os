@@ -15,6 +15,8 @@ Komutlar:
     key:ctrl-alt-t          tuş birleşimi gönder (QEMU qcode adları)
     type:metin              metni yaz (ASCII; boşluk için _ yerine gerçek boşluk)
     wheel:X,Y,+/-N          fare tekerleği
+    oturum:Ad,parola        masaüstüne geç: ilk açılışta hesap oluşturur, sonra giriş yapar
+                            (AxsDE durumunu seri konsoldan okur; masaüstü zaten açıksa bir şey yapmaz)
     anapano:metin           ana makinenin panosuna metin koy (VNC ile; AxsOS'a vdagent ile geçer)
     anapano-oku:DOSYA       AxsOS'ta kopyalanan ve ana makineye gelen son metni dosyaya yaz
 Örnek:
@@ -181,6 +183,23 @@ class VNCPano:
         self.s.sendall(b"\x06\x00\x00\x00" + struct.pack(">I", len(b)) + b)
 
 
+def axsde_durum(log, sure=90):
+    """Seri günlükte AxsDE'nin son bildirdiği durum: kurulum / giris / kilit / masaustu"""
+    son = None
+    t0 = time.time()
+    while time.time() - t0 < sure:
+        try:
+            for satir in open(log, errors="replace"):
+                if "[axsde] durum:" in satir:
+                    son = satir.split("durum:")[1].strip()
+        except OSError:
+            pass
+        if son:
+            return son
+        time.sleep(1)
+    return son
+
+
 def type_text(q, text):
     for ch in text:
         if ch.isupper():
@@ -271,6 +290,22 @@ def main():
                 q.hmp("sendkey " + v)
             elif k == "type":
                 type_text(q, v)
+            elif k == "oturum":
+                ad, _, parola = v.partition(",")
+                durum = axsde_durum(os.path.join(tmp, "serial.log"))
+                if durum == "kurulum":
+                    type_text(q, ad)
+                    q.hmp("sendkey tab")       # kullanıcı adı addan önerilir
+                    q.hmp("sendkey tab")
+                    type_text(q, parola)
+                    q.hmp("sendkey tab")
+                    type_text(q, parola)
+                    q.hmp("sendkey ret")
+                elif durum in ("giris", "kilit"):
+                    type_text(q, parola)
+                    q.hmp("sendkey ret")
+                print("[%.0fs] oturum: %s" % (time.time() - t0, durum))
+                time.sleep(2)
             elif k == "anapano":
                 vnc.koy(v)
             elif k == "anapano-oku":

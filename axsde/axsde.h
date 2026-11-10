@@ -261,6 +261,21 @@ void wm_prompt(const char *title, const char *msg, const char *initial, const ch
                PromptCb cb, int ctx);
 Win *wm_find_id(int id);
 
+/* Hesap ve oturum (login.c): ilk açılışta hesap, giriş ve kilit ekranı */
+void login_start(void (*on_done)(void));
+void login_lock(void);
+void login_new_account(void);
+int  login_active(void);
+int  login_has_account(void);
+void login_draw(Surf *s, Rect clip);
+void login_mouse(MouseEv *e);
+void login_key(KeyEv *e);
+void login_tick(void);
+const char *login_user(void);
+const char *login_fullname(void);
+int  login_set_password(const char *old, const char *pw);
+int  login_set_name(const char *name);
+
 /* Masaüstü (desktop.c): ~/Masaüstü içeriği simge olarak */
 void desktop_init(void);
 void desktop_draw(Surf *s, Rect clip);

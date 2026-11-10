@@ -105,7 +105,7 @@ static char prompt_title[96], prompt_msg[160], prompt_ok[32];
 static TextField pf;
 static PromptCb prompt_cb;
 enum { ACT_NONE, ACT_POWEROFF, ACT_REBOOT, ACT_CONSOLE, ACT_TERMINAL, ACT_WALLPAPER,
-       ACT_SETTINGS, ACT_ABOUT, ACT_FILES, ACT_STUDIO };
+       ACT_SETTINGS, ACT_ABOUT, ACT_FILES, ACT_STUDIO, ACT_LOCK };
 
 /* bildirimler */
 typedef struct { char title[64], body[320]; IconId icon; long until; } Notif;
@@ -614,7 +614,20 @@ static void draw_prompt(Surf *s)
     stroke_rrect(s, r, 16, 1, ALPHA(HEX(0xFFFFFF), 34));
     draw_text(s, F_UI_BOLD, 17, r.x + 22, r.y + 22, T.text, prompt_title);
     draw_text_wrap(s, F_UI, 13, r.x + 22, r.y + 56, r.w - 44, 2, 17, T.subtext, prompt_msg);
-    if (prompt_field) {
+    if (prompt_field == 2) {   /* parola: noktalar */
+        TextField d = pf;
+        int n = 0;
+        for (const char *p = pf.buf; *p;) {
+            utf8_next(&p);
+            n++;
+        }
+        d.buf[0] = 0;
+        for (int i = 0; i < n && i < 120; i++)
+            strcat(d.buf, "•");
+        d.len = (int)strlen(d.buf);
+        d.cur = d.len;
+        tf_draw(s, &d, prompt_field_rect(), "");
+    } else if (prompt_field) {
         Rect fr = prompt_field_rect();
         tf_draw(s, &pf, fr, "");
         if (prompt_sel > 0) {
@@ -700,6 +713,7 @@ static void do_action(int a)
         break;
     case ACT_SETTINGS: wm_open(&APP_SETTINGS, NULL); break;
     case ACT_ABOUT: wm_open(&APP_ABOUT, NULL); break;
+    case ACT_LOCK: login_lock(); break;
     case ACT_FILES: wm_open(&APP_FILES, NULL); break;
     case ACT_STUDIO: wm_open(&APP_STUDIO, NULL); break;
     }
@@ -1046,6 +1060,10 @@ static void draw_menu(Surf *s)
 static void render_scene(Rect clip, int with_overlays)
 {
     surf_clip(&screen, clip);
+    if (login_active()) {   /* giriş / kilit ekranı her şeyin yerine */
+        login_draw(&screen, clip);
+        return;
+    }
     blit(&screen, clip.x, clip.y, &wall, clip);
     desktop_draw(&screen, clip);
     Win *f = wm_focused();
@@ -1225,6 +1243,10 @@ void wm_on_mouse(MouseEv *e)
         last_click_btn = e->button;
     }
 
+    if (login_active()) {
+        login_mouse(e);
+        return;
+    }
     if (prompt_open) {
         prompt_mouse(e);
         return;
@@ -1356,8 +1378,9 @@ void wm_on_mouse(MouseEv *e)
                     { "Yeniden başlat", ACT_REBOOT, IC_REFRESH },
                     { "Metin konsoluna geç", ACT_CONSOLE, IC_TERMINAL },
                     { "AxsOS hakkında", ACT_ABOUT, IC_ABOUT },
+                    { "Kilitle  (Super+L)", ACT_LOCK, IC_KEYBOARD },
                 };
-                open_menu(SCREEN_W - 250, BAR_H + 4, pm, 4);
+                open_menu(SCREEN_W - 250, BAR_H + 4, pm, 5);
             } else if (rect_has(bar_layout_rect(), e->x, e->y)) {
                 kb_layout = !kb_layout;
                 config_save();
@@ -1451,6 +1474,8 @@ static void cycle_windows(void)
 void wm_on_key(KeyEv *e)
 {
     static int super_alone;
+    if ((e->code == KEY_LEFTMETA || e->code == KEY_RIGHTMETA) && login_active())
+        return;
     if (e->code == KEY_LEFTMETA || e->code == KEY_RIGHTMETA) {
         if (e->down == 1 && !(e->mods & ~MOD_SUPER))
             super_alone = 1;
@@ -1465,6 +1490,16 @@ void wm_on_key(KeyEv *e)
     }
     if (e->down)
         super_alone = 0;
+    if (login_active()) {
+        login_key(e);
+        return;
+    }
+    if (e->down && (e->mods & MOD_SUPER) && e->code == KEY_L) {
+        close_launcher();
+        close_menu();
+        login_lock();
+        return;
+    }
     if (prompt_open) {
         if (!e->down)
             return;
@@ -1472,6 +1507,8 @@ void wm_on_key(KeyEv *e)
             prompt_finish(0);
             return;
         }
+        if (prompt_field == 2 && (e->mods & MOD_CTRL) && (e->code == KEY_C || e->code == KEY_X))
+            return;   /* parola panoya kopyalanmasın */
         if (prompt_field && (e->mods & MOD_CTRL) && e->code == KEY_A) {
             prompt_sel = pf.cur = pf.len;
             wm_damage(prompt_field_rect());
@@ -1644,6 +1681,19 @@ void wm_quit(int code) { quit_code = code; }
 /* Ana döngü                                                           */
 /* ------------------------------------------------------------------ */
 
+/* giriş yapıldı: karşılama penceresi canlı kipte her açılışta, kalıcı depolamada yalnızca ilk kez */
+static void session_start(void)
+{
+    const char *mark = "/root/.config/axsde-hosgeldin";
+    if (access("/run/axs-kalici", F_OK) != 0 || access(mark, F_OK) != 0) {
+        wm_open(&APP_ABOUT, "welcome");
+        mkdir("/root/.config", 0755);
+        FILE *mf = fopen(mark, "w");
+        if (mf)
+            fclose(mf);
+    }
+}
+
 static volatile sig_atomic_t got_term;
 static void on_term(int sig) { (void)sig; got_term = 1; }
 
@@ -1667,6 +1717,7 @@ static void tick(void)
             wins[i]->app->tick(wins[i]);
     desktop_tick();
     clip_tick();
+    login_tick();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1858,17 +1909,8 @@ int main(int argc, char **argv)
     wm_damage_all();
     compose();
 
-    /* karşılama penceresi: canlı kipte her açılışta; kalıcı depolamada yalnızca ilk kez */
-    {
-        const char *mark = "/root/.config/axsde-hosgeldin";
-        if (access("/run/axs-kalici", F_OK) != 0 || access(mark, F_OK) != 0) {
-            wm_open(&APP_ABOUT, "welcome");
-            mkdir("/root/.config", 0755);
-            FILE *mf = fopen(mark, "w");
-            if (mf)
-                fclose(mf);
-        }
-    }
+    /* önce giriş (ilk açılışta hesap oluşturma), sonra oturum */
+    login_start(session_start);
 
     long next_tick = now_ms() + 250, next_net = now_ms() + 5000, next_scan = now_ms() + 3000;
     while (quit_code < 0 && !got_term) {

@@ -42,7 +42,9 @@ ok "poweroff"
 
 echo "[test] 2/2 masaüstü açılışı (ISO, AxsDE)..."
 rm -f "$OUT/ekran.png"
-scripts/qemu-gui.py --iso "wait:$GUIWAIT" "shot:$OUT/ekran.png" >/dev/null
+scripts/qemu-gui.py --iso "wait:$GUIWAIT" "oturum:Deneme Kullanici,test1234" wait:5 "shot:$OUT/ekran.png" > "$OUT/gui.log"
+grep -q "oturum: kurulum" "$OUT/gui.log" || { cat "$OUT/gui.log"; fail "ilk açılışta hesap oluşturma ekranı çıkmadı"; }
+ok "ilk açılışta hesap oluşturma ekranı çıktı, hesap oluşturuldu"
 [ -f "$OUT/ekran.png" ] || fail "ekran görüntüsü alınamadı"
 python3 - "$OUT/ekran.png" <<'EOF' || fail "masaüstü görünmüyor (ekran boş ya da metin konsolu)"
 import struct, sys, zlib
