@@ -13,6 +13,18 @@ DL="$BUILD/downloads/deb"
 IDX="$W/index-$ARACLAR_UBUNTU"
 R="$W/root"
 MIRROR="${UBUNTU_MIRROR:-http://archive.ubuntu.com/ubuntu}"
+# Ana ayna bağlantıyı koparır ya da takılırsa sırayla diğer aynalar denenir.
+AYNALAR="$MIRROR http://azure.archive.ubuntu.com/ubuntu http://us.archive.ubuntu.com/ubuntu http://de.archive.ubuntu.com/ubuntu"
+# indir <hedef> <aynaya göre yol>
+indir() {
+    local a
+    for a in $AYNALAR; do
+        curl -fsSL --connect-timeout 20 --max-time 600 --speed-limit 1024 --speed-time 60 \
+            --retry 2 --retry-all-errors --retry-delay 3 -o "$1" "$a/$2" && return 0
+        log "ayna yanıt vermedi, sıradaki deneniyor: $a"
+    done
+    return 1
+}
 command -v dpkg-deb >/dev/null || die "dpkg-deb yok: ./build.sh deps"
 mkdir -p "$DL" "$IDX"
 
@@ -22,7 +34,7 @@ for s in "$ARACLAR_UBUNTU" "$ARACLAR_UBUNTU-updates" "$ARACLAR_UBUNTU-security";
         f="$IDX/$s-$c.gz"
         if [ ! -s "$f" ] || [ -n "$(find "$f" -mtime +1 2>/dev/null)" ]; then
             log "Paket dizini: $s/$c"
-            curl -fsSL --retry 3 -o "$f.yeni" "$MIRROR/dists/$s/$c/binary-amd64/Packages.gz" && mv "$f.yeni" "$f" \
+            indir "$f.yeni" "dists/$s/$c/binary-amd64/Packages.gz" && mv "$f.yeni" "$f" \
                 || { [ -s "$f" ] || die "Ubuntu paket dizini indirilemedi: $s/$c"; }
         fi
     done
@@ -49,7 +61,7 @@ else
     while read -r ad surum yol sha boyut; do
         d="$DL/$(basename "$yol")"
         if [ ! -s "$d" ] || [ "$(sha256sum "$d" | cut -d' ' -f1)" != "$sha" ]; then
-            curl -fsSL --retry 3 -o "$d.part" "$MIRROR/$yol" || die "indirilemedi: $ad"
+            indir "$d.part" "$yol" || die "indirilemedi: $ad"
             [ "$(sha256sum "$d.part" | cut -d' ' -f1)" = "$sha" ] || die "sha256 tutmuyor: $ad"
             mv "$d.part" "$d"
         fi
