@@ -440,10 +440,8 @@ static void page_storage(Surf *s, SetSt *st, UiState *u, Rect a)
         draw_text_wrap(s, F_UI, 13, a.x, y, a.w, 4, 18, T.subtext,
                        "Disk bulunamadı. Sanal makineye bir disk ekle; ör. QEMU: qemu-img create -f qcow2 "
                        "veri.qcow2 20G, sonra -drive file=veri.qcow2,if=virtio");
-    if (need_reboot && ui_button(s, u, (Rect){ a.x, y + 6, 190, 38 }, "Şimdi yeniden başlat", BTN_PRIMARY)) {
-        char *argv[] = { "reboot", NULL };
-        spawn_bg(argv);
-    }
+    if (need_reboot && ui_button(s, u, (Rect){ a.x, y + 6, 190, 38 }, "Şimdi yeniden başlat", BTN_PRIMARY))
+        wm_shutdown(1);
 }
 
 static void page_system(Surf *s, SetSt *st, UiState *u, Rect a)

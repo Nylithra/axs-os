@@ -195,3 +195,9 @@ CONFIG_X86_16BIT=y
 
 # Pano: QEMU qemu-vdagent (virtio-serial "com.redhat.spice.0") ile ana makine panosu
 CONFIG_VIRTIO_CONSOLE=y
+
+# Açılış logosu: AxsOS logosu (scripts/build-kernel.sh üretir), ekranın ortasında
+CONFIG_LOGO=y
+CONFIG_LOGO_LINUX_CLUT224=y
+# CONFIG_LOGO_LINUX_MONO is not set
+# CONFIG_LOGO_LINUX_VGA16 is not set

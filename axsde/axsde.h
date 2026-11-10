@@ -319,6 +319,7 @@ void wm_on_key(KeyEv *e);
 void wm_on_mouse(MouseEv *e);
 void wm_wallpaper_changed(void);
 void wm_quit(int code);
+void wm_shutdown(int reboot);   /* kapanış ekranını göster, sonra kapat / yeniden başlat */
 Rect wm_content_rect(Win *w);  /* içerik alanının ekran koordinatı */
 void wm_run_in_terminal(const char *cmd, const char *title);
 void wm_open_file(const char *path);

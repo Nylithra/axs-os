@@ -690,20 +690,53 @@ static void spawn_detached(char *const argv[])
         waitpid(p, NULL, 0);
 }
 
+/* ---- kapanış ekranı ---- */
+static int shutting;          /* 0 yok, 1 kapat, 2 yeniden başlat */
+static long shut_at;
+static int shut_spin;
+
+void wm_shutdown(int reboot)
+{
+    if (shutting)
+        return;
+    shutting = reboot ? 2 : 1;
+    shut_at = now_ms() + 900;   /* ekran görünsün, sonra kapat */
+    close_menu();
+    wm_damage_all();
+}
+
+static void draw_shutdown(Surf *s, Rect clip)
+{
+    fill_rect(s, clip, HEX(0x0B0B14));
+    float cx = SCREEN_W / 2.0f, cy = SCREEN_H / 2.0f - 40;
+    draw_logo(s, cx, cy, 120, T.accent, T.accent2);
+    draw_text_center(s, F_UI, 20, (Rect){ 0, (int)cy + 96, SCREEN_W, 30 }, HEX(0xE5E5F0),
+                     shutting == 2 ? "Yeniden başlatılıyor…" : "Kapatılıyor…");
+    for (int i = 0; i < 8; i++) {   /* dönen noktalar */
+        float a = (float)(i * 0.785398 + shut_spin * 0.4);
+        int al = 60 + ((i + shut_spin) % 8) * 24;
+        fill_circle(s, cx + cosf(a) * 16, cy + 160 + sinf(a) * 16, 3.2f, ALPHA(HEX(0xFFFFFF), mini(al, 255)));
+    }
+}
+
+static void shutdown_tick(void)
+{
+    if (!shutting)
+        return;
+    shut_spin++;
+    wm_damage((Rect){ SCREEN_W / 2 - 40, SCREEN_H / 2 + 80, 80, 80 });
+    if (shut_at && now_ms() >= shut_at) {
+        shut_at = 0;
+        char *argv[] = { shutting == 2 ? "reboot" : "poweroff", NULL };
+        spawn_detached(argv);
+    }
+}
+
 static void do_action(int a)
 {
     switch (a) {
-    case ACT_POWEROFF: {
-        char *argv[] = { "poweroff", NULL };
-        wm_notify("Kapatılıyor", "AxsOS kapanıyor, hoşça kal!", IC_POWER);
-        spawn_detached(argv);
-        break;
-    }
-    case ACT_REBOOT: {
-        char *argv[] = { "reboot", NULL };
-        spawn_detached(argv);
-        break;
-    }
+    case ACT_POWEROFF: wm_shutdown(0); break;
+    case ACT_REBOOT: wm_shutdown(1); break;
     case ACT_CONSOLE: wm_quit(0); break;
     case ACT_TERMINAL: wm_open(&APP_TERMINAL, NULL); break;
     case ACT_WALLPAPER:
@@ -1060,6 +1093,10 @@ static void draw_menu(Surf *s)
 static void render_scene(Rect clip, int with_overlays)
 {
     surf_clip(&screen, clip);
+    if (shutting) {
+        draw_shutdown(&screen, clip);
+        return;
+    }
     if (login_active()) {   /* giriş / kilit ekranı her şeyin yerine */
         login_draw(&screen, clip);
         return;
@@ -1243,6 +1280,8 @@ void wm_on_mouse(MouseEv *e)
         last_click_btn = e->button;
     }
 
+    if (shutting)
+        return;
     if (login_active()) {
         login_mouse(e);
         return;
@@ -1718,6 +1757,7 @@ static void tick(void)
     desktop_tick();
     clip_tick();
     login_tick();
+    shutdown_tick();
 }
 
 /* ------------------------------------------------------------------ */

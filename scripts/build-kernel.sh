@@ -53,7 +53,19 @@ configure_kernel() {
     touch "$stamp"
 }
 
+# AxsOS açılış logosu (çekirdeğin Tux'u yerine; fbcon=logo-pos:center ile ortada)
+kernel_logo() {
+    local tool="$BUILD/tools/acilis-logo" ppm="$BUILD/acilis-logo.ppm"
+    mkdir -p "$BUILD/tools"
+    gcc -O2 -I"$ROOT/axsde" -o "$tool" "$ROOT/tools/acilis-logo.c" "$ROOT/axsde/gfx.c" -lm \
+        || die "açılış logosu aracı derlenemedi"
+    "$tool" "$ppm" 160 || die "açılış logosu üretilemedi"
+    local dst="$KSRC/drivers/video/logo/logo_linux_clut224.ppm"
+    cmp -s "$ppm" "$dst" || cp "$ppm" "$dst"
+}
+
 fetch_kernel
+kernel_logo
 configure_kernel
 log "Kernel derleniyor ($JOBS iş parçacığı)..."
 make -C "$KSRC" ARCH=x86_64 -j"$JOBS" bzImage

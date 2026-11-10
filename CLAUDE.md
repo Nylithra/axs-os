@@ -44,7 +44,7 @@ Tek komutla derlenir; QEMU'da ve BIOS/UEFI ile açılan bir ISO olarak çalış�
 | `scripts/ci-test.sh` | ISO açılış testi: metin kipinde axs/python/axpkg/poweroff ve masaüstü ekran görüntüsü (CI da bunu çalıştırır). |
 | `scripts/ci-tarayici-test.sh` | Tarayıcı testi: `build/uzak-depo`'yu sunar, ISO'da Firefox/Chrome'u resmi kaynaklardan kurup `https://example.com` ekran görüntüsü alır; WTA ile 32/64 bit .exe çalıştırır (mingw; internet gerekir; CI çalıştırır). |
 | `axsde --bench` | Görüntüsüz performans ölçümü (sürükleme, yazma, boyutlandırma, tam çizim, başlatıcı; ms/kare). Host'ta: `AXSDE_FONTS=build/fonts`, `AXSDE_BENCH_SHOT=a.ppm`. |
-| `scripts/qemu-gui.py wait:32 click:454,753 shot:/tmp/a.png` | Otomatik test (masaüstü): görüntüsüz QEMU + QMP; `click/dbl/drag/move/wheel/key/type/shot/wait`. `--iso` ile ISO'dan. Ekran 1280x800. |
+| `scripts/qemu-gui.py wait:32 click:454,753 shot:/tmp/a.png` | Otomatik test (masaüstü): görüntüsüz QEMU + QMP; `click/dbl/drag/move/wheel/key/type/shot/wait`. `--iso` ile ISO'dan. Ekran 1280x800. `oturum:Ad,parola` (ilk açılışta hesap kurar ya da giriş yapar; AxsDE durumu seri konsola `[axsde] durum: kurulum|giris|kilit|masaustu` yazar), `anapano:metin` / `anapano-oku:dosya` (VNC ile ana makine panosu). |
 
 Aşama bağımlılıkları: `busybox/init/axsh/axpkg/axsde/python` → kernel başlıkları (`kernel`);
 `axs` → `python`; `shell` → `python` (statik OpenSSL/zlib); `araclar` → yalnızca internet (archive.ubuntu.com); `apps` → `axsde` (stb + yazı tipleri);
@@ -86,6 +86,8 @@ scripts/repo-index.sh     Depo INDEX'i üretir (MANIFEST + sha256 + boyut + komu
 scripts/ci-tarayici-test.sh, ci-web.py   Tarayıcı uçtan uca testi ve test HTTP sunucusu
 rootfs/sbin/ag            Ağ yöneticisi (DHCP, durum, test, sabit adres)
 rootfs/sbin/kalici        Kalıcı depolama aracı (durum, diskler, hazirla, sifirla, takas)
+rootfs/usr/bin/pano       Pano aracı: `pano` (yaz), `pano -k [metin]` / `komut | pano -k` (kopyala), `pano -t` (temizle)
+tools/acilis-logo.c       Host aracı: çekirdek logosu (224 renk PPM), GRUB arka planı, init açılış görüntüsü
 scripts/novnc-server.py   Tarayıcı kipi: noVNC + WebSocket↔VNC köprüsü (tek port)
 scripts/qemu-gui.py       Masaüstü test aracı (QMP ile tıklama/yazma/ekran görüntüsü)
 pkgs/<ad>/                Terminal paketleri (MANIFEST + files/) → /var/lib/axpkg/repo/*.axp
@@ -253,6 +255,26 @@ build/                    (git'e girmez)
   - init, ekran konsolunda (tty1) framebuffer varsa shell yerine axsde başlatır;
     `axs.gui=0` çekirdek parametresi ya da güç menüsündeki "Metin konsoluna geç" ile kapatılır.
   - Ayarlar `/etc/axsde.conf` (kalıcı depolama açıksa korunur). Varsayılan saat dilimi UTC+3.
+  - **Pano** (`clip.c`): ortak dosya `/run/pano` (AxsDE, `pano` komutu, xkopru aynı dosyayı kullanır;
+    değişiklik mtime ile algılanır). Ana makineyle paylaşım SPICE vdagent protokolüyle: QEMU
+    `-chardev qemu-vdagent,clipboard=on` + `virtserialport name=com.redhat.spice.0` (`/dev/vport*`,
+    `CONFIG_VIRTIO_CONSOLE`); ANNOUNCE/GRAB/REQUEST/CLIPBOARD (UTF-8). Metin alanları (`ui.c`):
+    Ctrl+C/X/V, Shift+Insert. Terminal: fareyle seçim, çift tık sözcük, Ctrl+Shift+C/V (seçim varsa
+    Ctrl+C kopyalar), Ctrl+V, sağ tık menüsü, bracketed paste (DECSET 2004). Axs Stüdyo: Shift ile
+    seçim, Ctrl+A/C/X/V, sürükle seç, sağ tık. Tarayıcılarda xkopru odakta/Ctrl+V'de panoyu X
+    CLIPBOARD'a, Ctrl+C sonrası geri `xclip` ile aktarır (`tarayici-ortami` xclip içerir).
+  - **Hesap** (`login.c`): ilk açılışta kurulum ekranı (ad, kullanıcı adı önerisi, parola ×2; canlı
+    kipte "hesapsız devam"). Tek kullanıcı yöneticidir: `/etc/passwd`'de root'tan önce uid 0 takma
+    ad satırı (`ad:x:0:0:Tam Ad:/root:/bin/bash`), `/etc/shadow`'da SHA-512 `crypt` (`$6$`, root'a da
+    aynı parola; BusyBox `su`/`login`/`passwd` uyumlu). Sonraki açılışlarda giriş ekranı (saat, tarih,
+    baş harfli avatar, yanlış parolada titreme), Super+L / güç menüsü "Kilitle" ile kilit ekranı.
+    Ayarlar > Hesap: ad, parola değiştir, kilitle. `wm_prompt` alan türü 2 = gizli (parola).
+  - Kapanış: `wm_shutdown(yeniden)` "Kapatılıyor…" ekranını çizip ~0,9 sn sonra poweroff/reboot çalıştırır.
+- **Açılış görünümü**: GRUB gfxterm + `boot/grub/arka.png` (logo), menü gizli (`timeout_style=hidden`,
+  2 sn; Esc/Shift ile görünür). Varsayılan girdi sessiz: `quiet loglevel=3 fbcon=logo-pos:center
+  vt.global_cursor_default=0 initramfs_async=0`. Çekirdek logosu `CONFIG_LOGO` (build-kernel
+  `acilis-logo` ile üretir); bochs-drm devralınca kaybolduğu için init `/dev/fb0`'a
+  `/usr/share/axsos/acilis.ppm`'i ortalar (açılışta ve kapanışta; `axs.gui=0` ise çizmez).
 - **ISO**: `grub-mkrescue` ile BIOS+UEFI hibrit. Menü: masaüstü (varsayılan), canlı kip
   (kalıcı depolamasız), metin kipi, ayrıntılı, kurtarma (`rdinit=/bin/sh`). Konsol hem ekran (`tty0`) hem seri (`ttyS0`).
 
@@ -279,7 +301,8 @@ JetBrains/JetBrainsMono, novnc/noVNC). Yazı tipleri seyrek klonla tek dosya ola
 - Aşamalar: 1) kernel 2) BusyBox + initramfs 3) C init 4) axsh 5) axs dili
   6) axpkg 7) bootable ISO 8) AxsDE masaüstü 9) Uygulama Marketi + uygulamalar
   10) bash + gerçek ağ + uzak depo + Firefox/Chrome 11) kalıcı depolama 12) masaüstü dosyaları,
-  kolay arayüz (`use arayuz`), WTA (Windows programları). Hepsi tamamlandı.
+  kolay arayüz (`use arayuz`), WTA (Windows programları) 13) pano (ana makineyle), kullanıcı
+  hesabı/giriş ekranı, açılış/kapanış görünümü. Hepsi tamamlandı.
 - Masaüstü değişikliklerini `scripts/qemu-gui.py` ile ekran görüntüsü alarak doğrula.
 - Her değişiklikten sonra QEMU'da test et (`scripts/qemu-test.sh`), git commit at.
 - Her şey `./build.sh` ve `./run.sh` ile yeniden üretilebilir kalmalı; elle adım yok.

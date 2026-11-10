@@ -26,7 +26,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <linux/fb.h>
+#include <stdint.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/mount.h>
 #include <dirent.h>
 #include <sys/reboot.h>
@@ -153,6 +156,52 @@ static int run_wait(char *const argv[])
     return pid > 0 && WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
+/* Açılış ekranı: masaüstü açılana kadar çerçeve tamponunda koyu zemin + ortada AxsOS logosu.
+ * (Çekirdeğin logosu QEMU'da grafik sürücüsü değişince kaybolur; burada yeniden çizilir.) */
+static void acilis_ekrani(void)
+{
+    if (cmdline_has("axs.gui=0") || access(DESKTOP, X_OK) != 0)
+        return;
+    int fd = -1;
+    for (int i = 0; i < 20 && (fd = open("/dev/fb0", O_RDWR | O_CLOEXEC)) < 0; i++)
+        usleep(50000);
+    if (fd < 0)
+        return;
+    struct fb_var_screeninfo v;
+    struct fb_fix_screeninfo fx;
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &v) < 0 || ioctl(fd, FBIOGET_FSCREENINFO, &fx) < 0 ||
+        v.bits_per_pixel != 32) {
+        close(fd);
+        return;
+    }
+    size_t len = (size_t)fx.line_length * v.yres;
+    uint8_t *fb = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (fb == MAP_FAILED)
+        return;
+    const uint32_t zemin = 0x0B0B14;
+    for (uint32_t y = 0; y < v.yres; y++) {
+        uint32_t *row = (uint32_t *)(fb + (size_t)y * fx.line_length);
+        for (uint32_t x = 0; x < v.xres; x++)
+            row[x] = zemin;
+    }
+    FILE *f = fopen("/usr/share/axsos/acilis.ppm", "rb");
+    int w = 0, h = 0, mx = 0;
+    if (f && fscanf(f, "P6 %d %d %d", &w, &h, &mx) == 3 && fgetc(f) != EOF && w > 0 && h > 0 &&
+        (uint32_t)w <= v.xres && (uint32_t)h <= v.yres) {
+        uint32_t ox = (v.xres - w) / 2, oy = (v.yres - h) / 2 - v.yres / 20;
+        unsigned char px[3];
+        for (int y = 0; y < h; y++) {
+            uint32_t *row = (uint32_t *)(fb + (size_t)(oy + y) * fx.line_length);
+            for (int x = 0; x < w && fread(px, 1, 3, f) == 3; x++)
+                row[ox + x] = (uint32_t)px[0] << 16 | (uint32_t)px[1] << 8 | px[2];
+        }
+    }
+    if (f)
+        fclose(f);
+    munmap(fb, len);
+}
+
 /* Kalıcı depolama: overlay kökü kur ve içine geç. Başarısızsa canlı (RAM) kipte devam eder. */
 static void kalici_baslat(void)
 {
@@ -162,6 +211,7 @@ static void kalici_baslat(void)
     mount("proc", "/proc", "proc", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL);
     mount("sysfs", "/sys", "sysfs", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL);
     mount("devtmpfs", "/dev", "devtmpfs", MS_NOSUID, "mode=0755");
+    acilis_ekrani();
     if (cmdline_has("axs.kalici=0"))
         return;
     char dev[300];
@@ -434,6 +484,7 @@ static void shutdown_system(int how)
     kill(-1, SIGTERM);
     sleep(1);
     kill(-1, SIGKILL);
+    acilis_ekrani();   /* masaüstü kapandı: kapanırken metin konsolu yerine logo */
     while (waitpid(-1, NULL, WNOHANG) > 0)
         ;
     sync();

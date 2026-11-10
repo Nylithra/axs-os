@@ -239,7 +239,7 @@ def main():
         qemu += ["-cdrom", os.path.join(OUT, "axsos.iso"), "-boot", "d"]
     else:
         qemu += ["-kernel", os.path.join(OUT, "bzImage"), "-initrd", os.path.join(OUT, "initramfs.cpio.gz"),
-                 "-append", "console=tty0 console=ttyS0 video=1280x800 quiet"]
+                 "-append", "console=tty0 console=ttyS0 video=1280x800 quiet loglevel=3 fbcon=logo-pos:center vt.global_cursor_default=0"]
     p = subprocess.Popen(qemu)
     q = QMP(sock)
     vnc = VNCPano(vnc_port) if any(a.startswith("anapano") for a in args) else None
@@ -293,6 +293,7 @@ def main():
             elif k == "oturum":
                 ad, _, parola = v.partition(",")
                 durum = axsde_durum(os.path.join(tmp, "serial.log"))
+                time.sleep(4)   # ekran çizilip girişe hazır olsun
                 if durum == "kurulum":
                     type_text(q, ad)
                     q.hmp("sendkey tab")       # kullanıcı adı addan önerilir

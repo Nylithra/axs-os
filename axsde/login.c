@@ -524,13 +524,9 @@ int login_active(void) { return mode != L_YOK; }
 
 static void power(int i)
 {
-    char *argv[] = { i == 0 ? "poweroff" : "reboot", NULL };
-    pid_t p = fork();
-    if (p == 0) {
-        setsid();
-        execvp(argv[0], argv);
-        _exit(127);
-    }
+    mode = L_YOK;
+    surf_free(&bg);
+    wm_shutdown(i == 1);
 }
 
 void login_mouse(MouseEv *e)

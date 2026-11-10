@@ -51,7 +51,7 @@ case "$MODE" in
     kernel|gui)
         [ -f "$OUT/bzImage" ] || { echo "Önce ./build.sh çalıştırın." >&2; exit 1; }
         if [ $GUI = 1 ]; then
-            KCMD="console=tty0 console=ttyS0 video=1280x800 $KCMD"
+            KCMD="console=tty0 console=ttyS0 video=1280x800 fbcon=logo-pos:center vt.global_cursor_default=0 loglevel=3 $KCMD"
         else
             KCMD="console=ttyS0 $KCMD"
         fi
