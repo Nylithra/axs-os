@@ -222,10 +222,53 @@ void tf_set(TextField *t, const char *s)
     t->cur = t->len;
 }
 
+int key_is_modifier(int c)
+{
+    return c == KEY_LEFTCTRL || c == KEY_RIGHTCTRL || c == KEY_LEFTSHIFT || c == KEY_RIGHTSHIFT ||
+           c == KEY_LEFTALT || c == KEY_RIGHTALT || c == KEY_LEFTMETA || c == KEY_RIGHTMETA || c == KEY_CAPSLOCK;
+}
+
+/* pano: AxsDE'de clip.c bağlar; dış uygulamalarda NULL (yapıştırma yok) */
+const char *(*ui_clip_get)(void);
+void (*ui_clip_set)(const char *);
+
 int tf_key(TextField *t, KeyEv *e)
 {
     if (!e->down)
         return 0;
+    if ((e->mods & MOD_CTRL) && (e->code == KEY_V || e->code == KEY_C || e->code == KEY_X)) {
+        if (e->code == KEY_V && ui_clip_get) {         /* yapıştır: ilk satır, imlecin yerine */
+            const char *c = ui_clip_get();
+            int n = 0;
+            while (c[n] && c[n] != '\n' && c[n] != '\r')
+                n++;
+            n = mini(n, (int)sizeof t->buf - 1 - t->len);
+            while (n > 0 && (c[n] & 0xC0) == 0x80)       /* UTF-8 karakterini bölme */
+                n--;
+            if (n <= 0)
+                return 0;
+            memmove(t->buf + t->cur + n, t->buf + t->cur, t->len - t->cur + 1);
+            memcpy(t->buf + t->cur, c, n);
+            t->len += n;
+            t->cur += n;
+            return 1;
+        }
+        if (ui_clip_set && t->len) {                   /* kopyala / kes: alanın tamamı */
+            ui_clip_set(t->buf);
+            if (e->code == KEY_X) {
+                t->buf[0] = 0;
+                t->len = t->cur = 0;
+                return 1;
+            }
+        }
+        return 0;
+    }
+    if ((e->mods & MOD_SHIFT) && e->code == KEY_INSERT && ui_clip_get) {
+        KeyEv v = *e;
+        v.code = KEY_V;
+        v.mods = MOD_CTRL;
+        return tf_key(t, &v);
+    }
     switch (e->code) {
     case KEY_ENTER:
     case KEY_KPENTER:

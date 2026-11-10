@@ -1666,6 +1666,7 @@ static void tick(void)
         if (wins[i]->app->tick)
             wins[i]->app->tick(wins[i]);
     desktop_tick();
+    clip_tick();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1848,6 +1849,7 @@ int main(int argc, char **argv)
     if (input_init() < 0)
         fprintf(stderr, "axsde: giriş aygıtı bulunamadı\n");
     apps_scan();
+    clip_init();
     desktop_init();
     if (ext_init() < 0)
         fprintf(stderr, "axsde: uygulama soketi açılamadı\n");
@@ -1880,6 +1882,10 @@ int main(int argc, char **argv)
             pfd[n] = (struct pollfd){ ifd[i], POLLIN, 0 };
             kind[n++] = -1;
         }
+        if (clip_fd() >= 0) {
+            pfd[n] = (struct pollfd){ clip_fd(), POLLIN, 0 };
+            kind[n++] = -3;
+        }
         int efd[20];
         int ne = ext_fds(efd, 20);
         for (int i = 0; i < ne && n < 60; i++) {
@@ -1908,6 +1914,8 @@ int main(int argc, char **argv)
                 input_read(pfd[i].fd);
             } else if (kind[i] == -2) {
                 ext_io(pfd[i].fd);
+            } else if (kind[i] == -3) {
+                clip_io();
             } else {
                 for (int j = 0; j < nwins; j++)
                     if (wins[j]->id == kind[i] && wins[j]->app->io) {

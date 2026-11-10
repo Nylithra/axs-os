@@ -333,7 +333,8 @@ typedef struct {
 void ui_begin(UiState *u);                 /* çizime başlarken */
 /* Anında-mod uygulamalar için fare olayı: tıklamalar çizim sırasında işlenir */
 void ui_dispatch(Win *w, UiState *u, MouseEv *e);
-int  ui_move(UiState *u, MouseEv *e);      /* 1 = üzerinde olunan öğe değişti, yeniden çiz */
+int  ui_move(UiState *u, MouseEv *e);
+int  key_is_modifier(int code);         /* Ctrl, Shift, Alt, Super tek başına */      /* 1 = üzerinde olunan öğe değişti, yeniden çiz */
 
 typedef enum { BTN_NORMAL, BTN_PRIMARY, BTN_DANGER, BTN_GHOST } BtnStyle;
 
@@ -398,6 +399,13 @@ void  term_feed(Term *t, const char *s, int n);   /* doğrudan metin yaz */
 void  term_blink(Term *t);
 int   term_font_size(void);
 void  term_cell_size(int *cw, int *ch);
+void  term_sel_start(Term *t, int x, int y);   /* x, y: hücre */
+void  term_sel_move(Term *t, int x, int y);
+void  term_sel_word(Term *t, int x, int y);
+void  term_sel_clear(Term *t);
+int   term_has_sel(Term *t);
+char *term_sel_text(Term *t);                  /* free() ile bırak */
+void  term_paste(Term *t, const char *text);
 
 /* ------------------------------------------------------------------ */
 /* Yapılandırma                                                        */
@@ -406,6 +414,16 @@ void  term_cell_size(int *cw, int *ch);
 void config_load(void);
 void config_save(void);
 extern int accent_idx;
+
+/* Pano (clip.c): /run/pano dosyası; QEMU vdagent ile ana makinenin panosuna eşitlenir */
+void clip_init(void);
+void clip_set(const char *text);
+const char *clip_get(void);       /* boş olabilir, NULL olmaz */
+int  clip_fd(void);               /* vdagent bağlantı noktası (-1 yok) */
+void clip_io(void);
+void clip_tick(void);
+extern const char *(*ui_clip_get)(void);   /* ui.c metin alanları için */
+extern void (*ui_clip_set)(const char *);
 
 /* Genel yardımcılar */
 long now_ms(void);

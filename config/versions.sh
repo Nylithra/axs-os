@@ -21,7 +21,7 @@ CURL_VER=8.18.0              # HTTPS istemcisi (axpkg uzak depo, tarayıcı indi
 REMOTE_REPO=https://github.com/Nylithra/axs-os/releases/download/paketler
 # Tarayıcı çalışma ortamı (uzak depo paketi; ./build.sh tarayici, root ister)
 TARAYICI_UBUNTU=noble        # Ubuntu 24.04 LTS kütüphaneleri (glibc, GTK, X)
-TARAYICI_ORTAM_VER=1.1       # tarayici-ortami paket sürümü
+TARAYICI_ORTAM_VER=1.2       # tarayici-ortami paket sürümü
 E2FS_VER=1.47.3              # e2fsprogs: kalıcı depolama diski için mkfs.ext4 / e2fsck
 
 # Hazır kurulu araçlar (Ubuntu paketleri + glibc çalışma zamanı; scripts/build-araclar.sh)

@@ -75,6 +75,9 @@ if [ $GUI = 0 ]; then
 else
     # Masaüstü: sanal tablet (fare imleci tam hizalı) + klavye; seri konsol terminalde kalır
     ARGS+=(-device virtio-tablet-pci -device virtio-keyboard-pci -serial mon:stdio -audio none)
+    # ortak pano: ana makinede kopyala, AxsOS'ta yapıştır (ve tersi)
+    ARGS+=(-device virtio-serial-pci -chardev qemu-vdagent,id=vdagent,clipboard=on
+           -device virtserialport,chardev=vdagent,name=com.redhat.spice.0)
     if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && [ "${NOVNC:-0}" != 1 ]; then
         ARGS+=(-display "gtk,zoom-to-fit=on" -name AxsOS)
     else

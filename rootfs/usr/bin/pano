@@ -1,0 +1,15 @@
+#!/bin/sh
+# pano - AxsOS panosu (kopyala / yapıştır). Masaüstü ve ana makine (QEMU) ile ortak.
+#   pano                 panodaki metni yaz
+#   pano -k [metin...]   panoya kopyala (metin verilmezse standart girişten: komut | pano -k)
+#   pano -t              panoyu temizle
+P=/run/pano
+case "${1:-}" in
+-k|--kopyala)
+    shift
+    if [ $# -gt 0 ]; then printf '%s' "$*" > "$P.$$"; else cat > "$P.$$"; fi
+    mv -f "$P.$$" "$P" ;;
+-t|--temizle) : > "$P" ;;
+-h|--help|yardim) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//' ;;
+*) [ -f "$P" ] && cat "$P" ;;
+esac

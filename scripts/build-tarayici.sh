@@ -32,6 +32,8 @@ PKGS=(
     xdg-utils ca-certificates
     # kurulum sırasında tarayıcı arşivlerini açmak için
     xz-utils bzip2
+    # pano köprüsü (xkopru): AxsOS panosu <-> X CLIPBOARD
+    xclip
     # WTA (Wine): Windows programları için X/yazı tipi/TLS kütüphaneleri
     libfreetype6 libfontconfig1 libgnutls30t64 libxi6 libxcursor1 libxinerama1 libxxf86vm1
     libxrender1 libxext6 libxfixes3 libunwind8 libpcsclite1 cabextract unzip

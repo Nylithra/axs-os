@@ -15,6 +15,8 @@ Komutlar:
     key:ctrl-alt-t          tuş birleşimi gönder (QEMU qcode adları)
     type:metin              metni yaz (ASCII; boşluk için _ yerine gerçek boşluk)
     wheel:X,Y,+/-N          fare tekerleği
+    anapano:metin           ana makinenin panosuna metin koy (VNC ile; AxsOS'a vdagent ile geçer)
+    anapano-oku:DOSYA       AxsOS'ta kopyalanan ve ana makineye gelen son metni dosyaya yaz
 Örnek:
     scripts/qemu-gui.py wait:40 shot:/tmp/masaustu.png key:ctrl-alt-t wait:3 type:ls wait:1 key:ret shot:/tmp/t.png
 """
@@ -25,6 +27,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zlib
 
@@ -103,6 +106,81 @@ KEYMAP = {" ": "spc", "\n": "ret", ".": "dot", ",": "comma", "-": "minus", "/": 
           "}": "shift-bracket_right"}
 
 
+class VNCPano:
+    """Pano denemesi için çok küçük bir VNC istemcisi (RFB 3.8, parolasız).
+    ClientCutText ile ana makine panosunu ayarlar; ServerCutText'i (AxsOS'ta kopyalanan) kaydeder."""
+
+    def __init__(self, port):
+        for _ in range(100):
+            try:
+                self.s = socket.create_connection(("127.0.0.1", port))
+                break
+            except OSError:
+                time.sleep(0.2)
+        self.f = self.s.makefile("rb")
+        ver = self.f.read(12)
+        self.s.sendall(ver)
+        n = self.f.read(1)[0]
+        types = self.f.read(n)
+        assert 1 in types, "VNC parolasız değil"
+        self.s.sendall(b"\x01")
+        assert struct.unpack(">I", self.f.read(4))[0] == 0
+        self.s.sendall(b"\x01")  # paylaşımlı
+        w, h = struct.unpack(">HH", self.f.read(4))
+        self.f.read(16)
+        ln = struct.unpack(">I", self.f.read(4))[0]
+        self.f.read(ln)
+        self.son = None
+        # genişletilmiş pano (QEMU, AxsOS'taki kopyalamayı yalnızca buna bildirir)
+        self.s.sendall(b"\x02\x00" + struct.pack(">Hi", 1, -1063131698))
+        threading.Thread(target=self.oku, daemon=True).start()
+
+    def oku(self):
+        try:
+            while True:
+                t = self.f.read(1)
+                if not t:
+                    return
+                if os.environ.get("PANO_DEBUG"):
+                    print("vnc mesaj", t[0], file=sys.stderr)
+                if t[0] == 3:  # ServerCutText
+                    self.f.read(3)
+                    ln = struct.unpack(">i", self.f.read(4))[0]
+                    if ln >= 0:
+                        self.son = self.f.read(ln).decode("latin-1")
+                    else:
+                        d = self.f.read(-ln)
+                        flags = struct.unpack(">I", d[:4])[0]
+                        if os.environ.get("PANO_DEBUG"):
+                            print("vnc pano bayrak %08x" % flags, file=sys.stderr)
+                        if flags & (1 << 24):      # yetenekler: bizimkini bildir
+                            self.ext(struct.pack(">II", (1 << 24) | (1 << 25) | (1 << 27) | (1 << 28) | 1, 1 << 20))
+                        elif flags & (1 << 27) and flags & 1:   # bildirim: metin var, iste
+                            self.ext(struct.pack(">I", (1 << 25) | 1))
+                        elif flags & (1 << 28) and flags & 1:   # gönderilen veri
+                            z = zlib.decompress(d[4:])
+                            n = struct.unpack(">I", z[:4])[0]
+                            self.son = z[4:4 + n].rstrip(b"\x00").decode("utf-8", "replace")
+                elif t[0] == 2:  # zil
+                    pass
+                elif t[0] == 1:
+                    self.f.read(1)
+                    _, n = struct.unpack(">HH", self.f.read(4))
+                    self.f.read(6 * n)
+                else:
+                    return
+        except Exception as e:
+            print("vnc okuma hatası:", e, file=sys.stderr)
+            return
+
+    def ext(self, veri):
+        self.s.sendall(b"\x06\x00\x00\x00" + struct.pack(">i", -len(veri)) + veri)
+
+    def koy(self, metin):
+        b = metin.encode("latin-1", "replace")
+        self.s.sendall(b"\x06\x00\x00\x00" + struct.pack(">I", len(b)) + b)
+
+
 def type_text(q, text):
     for ch in text:
         if ch.isupper():
@@ -125,7 +203,12 @@ def main():
     qemu = ["qemu-system-x86_64", "-m", os.environ.get("MEM", "768M"), "-display", "none",
             "-qmp", "unix:%s,server,nowait" % sock, "-serial", "file:%s/serial.log" % tmp,
             "-nic", "user,model=e1000", "-device", "virtio-tablet-pci", "-device", "virtio-keyboard-pci",
+            "-device", "virtio-serial-pci", "-chardev", "qemu-vdagent,id=vdagent,clipboard=on",
+            "-device", "virtserialport,chardev=vdagent,name=com.redhat.spice.0",
             "-no-reboot"]
+    vnc_port = 5990 + os.getpid() % 9
+    if any(a.startswith("anapano") for a in args):
+        qemu += ["-vnc", "127.0.0.1:%d" % (vnc_port - 5900)]
     disk = os.environ.get("DISK", "")
     if disk and disk != "none":  # kalıcı depolama diski (test için)
         qemu += ["-drive", "file=%s,if=virtio,format=%s" % (disk, "qcow2" if disk.endswith(".qcow2") else "raw")]
@@ -140,6 +223,7 @@ def main():
                  "-append", "console=tty0 console=ttyS0 video=1280x800 quiet"]
     p = subprocess.Popen(qemu)
     q = QMP(sock)
+    vnc = VNCPano(vnc_port) if any(a.startswith("anapano") for a in args) else None
     t0 = time.time()
     try:
         for a in args:
@@ -187,6 +271,11 @@ def main():
                 q.hmp("sendkey " + v)
             elif k == "type":
                 type_text(q, v)
+            elif k == "anapano":
+                vnc.koy(v)
+            elif k == "anapano-oku":
+                with open(v, "w") as f:
+                    f.write(vnc.son if vnc.son is not None else "(gelmedi)")
             else:
                 print("bilinmeyen komut:", a)
     finally:

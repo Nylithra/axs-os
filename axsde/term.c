@@ -48,6 +48,9 @@ struct Term {
     pid_t pid;
     int alive, exit_code;
     int blink_on;
+    int bpaste;                 /* parantezli yapıştırma (DECSET 2004) */
+    /* seçim: satırlar "ekran satırı - geri kaydırma" (sy; <0 geri kaydırmada) */
+    int sel_on, sel_y0, sel_x0, sel_y1, sel_x1;
 };
 
 static const uint32_t PAL16[16] = {
@@ -450,6 +453,7 @@ static void do_csi(Term *t, char final)
             case 25: t->cursor_on = on; mark(t, t->cy); break;
             case 47: case 1047: set_alt(t, on); break;
             case 1049: set_alt(t, on); if (on) { t->cx = t->cy = 0; } break;
+            case 2004: t->bpaste = on; break;
             }
         }
         break;
@@ -460,6 +464,10 @@ static void do_csi(Term *t, char final)
 
 void term_feed(Term *t, const char *buf, int len)
 {
+    if (len > 0 && t->sel_on) {   /* yeni çıktı: seçim artık eski yeri göstermez */
+        t->sel_on = 0;
+        t->all_dirty = 1;
+    }
     int old_cy = t->cy;
     for (int i = 0; i < len; i++) {
         unsigned char b = (unsigned char)buf[i];
@@ -729,6 +737,152 @@ void term_key(Term *t, KeyEv *e)
 }
 
 /* ------------------------------------------------------------------ */
+/* Seçim ve pano                                                       */
+/* ------------------------------------------------------------------ */
+
+static const Cell *line_at(Term *t, int sy)
+{
+    if (sy >= 0)
+        return sy < t->rows ? &t->scr[sy * t->cols] : NULL;
+    if (-sy > t->sb_count)
+        return NULL;
+    return &t->sb[((t->sb_head + SCROLLBACK + sy) % SCROLLBACK) * t->cols];
+}
+
+/* (x, y): hücre konumu (görünen ekranda) */
+void term_sel_start(Term *t, int x, int y)
+{
+    t->sel_on = 1;
+    t->sel_x0 = t->sel_x1 = clampi(x, 0, t->cols);
+    t->sel_y0 = t->sel_y1 = clampi(y, 0, t->rows - 1) - t->view;
+    t->all_dirty = 1;
+}
+
+void term_sel_move(Term *t, int x, int y)
+{
+    if (!t->sel_on)
+        return;
+    t->sel_x1 = clampi(x, 0, t->cols);
+    t->sel_y1 = clampi(y, 0, t->rows - 1) - t->view;
+    t->all_dirty = 1;
+}
+
+static int is_word(uint32_t c) { return c > ' ' && !strchr("\"'`()[]{}<>|;,", (int)(c < 128 ? c : 'a')); }
+
+void term_sel_word(Term *t, int x, int y)
+{
+    int sy = clampi(y, 0, t->rows - 1) - t->view;
+    const Cell *l = line_at(t, sy);
+    if (!l)
+        return;
+    x = clampi(x, 0, t->cols - 1);
+    int a = x, b = x;
+    if (is_word(l[x].ch)) {
+        while (a > 0 && is_word(l[a - 1].ch))
+            a--;
+        while (b < t->cols - 1 && is_word(l[b + 1].ch))
+            b++;
+    }
+    t->sel_on = 1;
+    t->sel_y0 = t->sel_y1 = sy;
+    t->sel_x0 = a;
+    t->sel_x1 = b + 1;
+    t->all_dirty = 1;
+}
+
+void term_sel_clear(Term *t)
+{
+    if (t->sel_on) {
+        t->sel_on = 0;
+        t->all_dirty = 1;
+    }
+}
+
+static void sel_norm(Term *t, int *y0, int *x0, int *y1, int *x1)
+{
+    *y0 = t->sel_y0; *x0 = t->sel_x0; *y1 = t->sel_y1; *x1 = t->sel_x1;
+    if (*y0 > *y1 || (*y0 == *y1 && *x0 > *x1)) {
+        int ty = *y0, tx = *x0;
+        *y0 = *y1; *x0 = *x1; *y1 = ty; *x1 = tx;
+    }
+}
+
+int term_has_sel(Term *t)
+{
+    return t->sel_on && (t->sel_y0 != t->sel_y1 || t->sel_x0 != t->sel_x1);
+}
+
+static int in_sel(Term *t, int sy, int x)
+{
+    if (!term_has_sel(t))
+        return 0;
+    int y0, x0, y1, x1;
+    sel_norm(t, &y0, &x0, &y1, &x1);
+    if (sy < y0 || sy > y1)
+        return 0;
+    if (sy == y0 && x < x0)
+        return 0;
+    if (sy == y1 && x >= x1)
+        return 0;
+    return 1;
+}
+
+/* seçili metin (UTF-8, satır sonlarındaki boşluklar atılır); free() ile bırakılır */
+char *term_sel_text(Term *t)
+{
+    if (!term_has_sel(t))
+        return NULL;
+    int y0, x0, y1, x1;
+    sel_norm(t, &y0, &x0, &y1, &x1);
+    size_t cap = (size_t)(y1 - y0 + 1) * (t->cols * 4 + 1) + 1, n = 0;
+    char *out = malloc(cap);
+    for (int y = y0; y <= y1; y++) {
+        const Cell *l = line_at(t, y);
+        int a = y == y0 ? x0 : 0, b = y == y1 ? x1 : t->cols;
+        size_t start = n;
+        for (int x = a; l && x < b && x < t->cols; x++)
+            n += utf8_put(out + n, l[x].ch ? l[x].ch : ' ');
+        if (y < y1 || b >= t->cols)
+            while (n > start && out[n - 1] == ' ')
+                n--;
+        if (y < y1)
+            out[n++] = '\n';
+    }
+    out[n] = 0;
+    return out;
+}
+
+/* panodaki metni kabuğa gönder (satır sonu = Enter; parantezli yapıştırma destekliyse işaretli) */
+void term_paste(Term *t, const char *text)
+{
+    if (!text || !*text)
+        return;
+    if (t->bpaste)
+        term_write(t, "\033[200~", 6);
+    const char *p = text;
+    while (*p) {
+        const char *q = p;
+        while (*q && *q != '\n' && *q != '\r')
+            q++;
+        if (q > p)
+            term_write(t, p, (int)(q - p));
+        if (!*q)
+            break;
+        if (*q == '\r' && q[1] == '\n')
+            q++;
+        term_write(t, "\r", 1);
+        p = q + 1;
+    }
+    if (t->bpaste)
+        term_write(t, "\033[201~", 6);
+    term_sel_clear(t);
+    if (t->view) {
+        t->view = 0;
+        t->all_dirty = 1;
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Çizim                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -772,6 +926,10 @@ Rect term_draw(Term *t, Surf *s, Rect r, int focused, int full)
                 uint32_t tmp = fg;
                 fg = bg;
                 bg = tmp;
+            }
+            if (t->sel_on && in_sel(t, sy, x)) {
+                fg = HEX(0xFFFFFF);
+                bg = mix(DEF_BG, T.accent, 170);
             }
             int is_cur = focused && t->cursor_on && !t->view && sy == t->cy && x == t->cx && t->blink_on;
             if (is_cur) {

@@ -38,9 +38,13 @@ if not exist "AxsOS\veri.qcow2" (
   "%QIMG%" create -f qcow2 "AxsOS\veri.qcow2" 20G
 )
 
-echo AxsOS baslatiliyor... (kapatmak icin AxsOS icinde: poweroff)
+rem Ortak pano: Windows'ta kopyala, AxsOS'ta yapistir (ve tersi). QEMU surumu destekliyorsa eklenir.
+set "PANO="
+"%QEMU%" -chardev help 2>nul | findstr /c:"qemu-vdagent" >nul && set "PANO=-device virtio-serial-pci -chardev qemu-vdagent,id=vda,clipboard=on -device virtserialport,chardev=vda,name=com.redhat.spice.0"
+
+echo AxsOS baslatiliyor... kapatmak icin AxsOS icinde: poweroff
 rem 4G bellek: Firefox/Chrome icin gerekli (tarayicisiz 2G yeter). whpx: Windows donanim hizlandirmasi
 rem (Windows ozellikleri > "Windows Hypervisor Platform"); yoksa tcg (yazilim) kullanilir.
-"%QEMU%" -m 4G -smp 2 -accel whpx -accel tcg -cdrom "AxsOS\axsos.iso" -drive file=AxsOS\veri.qcow2,if=virtio -boot d -name AxsOS -netdev user,id=n0 -device e1000,netdev=n0 -device virtio-tablet-pci -device virtio-keyboard-pci
+"%QEMU%" -m 4G -smp 2 -accel whpx -accel tcg -cdrom "AxsOS\axsos.iso" -drive file=AxsOS\veri.qcow2,if=virtio -boot d -name AxsOS -netdev user,id=n0 -device e1000,netdev=n0 -device virtio-tablet-pci -device virtio-keyboard-pci %PANO%
 
 ```

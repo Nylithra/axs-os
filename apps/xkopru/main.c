@@ -6,6 +6,10 @@
  * eşler, değişen satırları AxsDE penceresine kopyalar. Klavye ve fare olayları X sunucusuna
  * XTEST uzantısıyla (ham X11 protokolü, Xlib'siz) iletilir. Pencere kapatılınca --pid ile
  * verilen tarayıcı sürecine SIGTERM gönderilir; X sunucusu kapanınca xkopru da çıkar.
+ *
+ * Pano: AxsOS panosu (/run/pano) ile X'in CLIPBOARD seçimi chroot'taki xclip ile eşitlenir:
+ * pencere odaklanınca ve Ctrl+V / Shift+Insert'te AxsOS -> X, Ctrl+C / Ctrl+X'ten sonra ve
+ * odak gidince X -> AxsOS. Böylece tarayıcı ve Windows programlarında kopyala/yapıştır çalışır.
  */
 #include "axsapp.h"
 
@@ -21,6 +25,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -33,6 +38,94 @@ static int fb_w, fb_h, fb_stride, fb_off;
 static pid_t child = -1;
 static uint8_t keys_down[256];
 static int buttons_down[8];
+static int xdisplay = 1;
+static const char *kok = "/opt/tarayici";   /* xclip'in bulunduğu chroot */
+static struct timespec pano_mt;               /* X'e son gönderilen panonun zamanı */
+static long pull_at;                          /* Ctrl+C sonrası X panosunu okuma zamanı */
+
+#define PANO "/run/pano"
+
+/* chroot içinde xclip çalıştır; in/out: dosya (NULL yok). En fazla ~2 sn bekler */
+static int xclip(const char *mode, const char *in, const char *out)
+{
+    char xc[300];
+    snprintf(xc, sizeof xc, "%s/usr/bin/xclip", kok);
+    if (access(xc, X_OK) != 0)
+        return -1;
+    pid_t p = fork();
+    if (p == 0) {
+        int fi = open(in ? in : "/dev/null", O_RDONLY);
+        int fo = open(out ? out : "/dev/null", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fi >= 0) dup2(fi, 0);
+        if (fo >= 0) dup2(fo, 1);
+        int nul = open("/dev/null", O_WRONLY);
+        if (nul >= 0) dup2(nul, 2);
+        for (int fd = 3; fd < 256; fd++)
+            close(fd);
+        setsid();
+        char d[16];
+        snprintf(d, sizeof d, "DISPLAY=:%d", xdisplay);
+        execl("/usr/sbin/chroot", "chroot", kok, "/usr/bin/env", d, "/usr/bin/xclip", mode,
+              "-selection", "clipboard", (char *)NULL);
+        execlp("chroot", "chroot", kok, "/usr/bin/env", d, "/usr/bin/xclip", mode,
+               "-selection", "clipboard", (char *)NULL);
+        _exit(127);
+    }
+    if (p < 0)
+        return -1;
+    for (int i = 0; i < 200; i++) {   /* xclip -i seçimi aldıktan sonra kendini arka plana atar */
+        int st;
+        if (waitpid(p, &st, WNOHANG) == p)
+            return WIFEXITED(st) && WEXITSTATUS(st) == 0 ? 0 : -1;
+        usleep(10000);
+    }
+    kill(p, SIGKILL);
+    waitpid(p, NULL, 0);
+    return -1;
+}
+
+/* AxsOS panosu değiştiyse X'e ver */
+static void pano_push(void)
+{
+    struct stat sb;
+    if (stat(PANO, &sb) != 0 || sb.st_size == 0)
+        return;
+    if (sb.st_mtim.tv_sec == pano_mt.tv_sec && sb.st_mtim.tv_nsec == pano_mt.tv_nsec)
+        return;
+    if (xclip("-i", PANO, NULL) == 0)
+        pano_mt = sb.st_mtim;
+}
+
+/* X'te kopyalanan metni AxsOS panosuna al */
+static void pano_pull(void)
+{
+    char tmp[64];
+    snprintf(tmp, sizeof tmp, "/run/pano.x%d", (int)getpid());
+    struct stat sb;
+    if (xclip("-o", NULL, tmp) == 0 && stat(tmp, &sb) == 0 && sb.st_size > 0) {
+        /* aynıysa dokunma (gereksiz bildirim olmasın) */
+        int same = 0;
+        struct stat pb;
+        if (stat(PANO, &pb) == 0 && pb.st_size == sb.st_size) {
+            FILE *a = fopen(PANO, "rb"), *b = fopen(tmp, "rb");
+            same = a && b;
+            int ca, cb;
+            while (same && (ca = fgetc(a)) != EOF) {
+                cb = fgetc(b);
+                if (ca != cb)
+                    same = 0;
+            }
+            if (a) fclose(a);
+            if (b) fclose(b);
+        }
+        if (!same && rename(tmp, PANO) == 0) {
+            if (stat(PANO, &pb) == 0)
+                pano_mt = pb.st_mtim;   /* kendi koyduğumuzu geri itme */
+            return;
+        }
+    }
+    unlink(tmp);
+}
 
 static int xwrite(const void *buf, size_t n)
 {
@@ -227,6 +320,10 @@ static void on_key(KeyEv *e)
     int kc = e->code + 8; /* evdev -> X anahtar kodu */
     if (kc < 8 || kc > 255)
         return;
+    if (e->down && (((e->mods & MOD_CTRL) && e->code == KEY_V) || ((e->mods & MOD_SHIFT) && e->code == KEY_INSERT)))
+        pano_push();   /* yapıştırmadan önce X panosu güncel olsun */
+    if (!e->down && (e->mods & MOD_CTRL) && (e->code == KEY_C || e->code == KEY_X))
+        pull_at = now_ms() + 250;
     if (e->down) {
         fake(2, kc, 0, 0); /* basılı tutulunca tekrar eden basışlar X'te de tekrar eder */
         keys_down[kc] = 1;
@@ -259,10 +356,11 @@ int main(int argc, char **argv)
     int display = 1;
     const char *fbpath = NULL, *title = "Tarayıcı";
     for (int i = 1; i + 1 < argc; i += 2) {
-        if (!strcmp(argv[i], "--display")) display = atoi(argv[i + 1]);
+        if (!strcmp(argv[i], "--display")) xdisplay = display = atoi(argv[i + 1]);
         else if (!strcmp(argv[i], "--fb")) fbpath = argv[i + 1];
         else if (!strcmp(argv[i], "--title")) title = argv[i + 1];
         else if (!strcmp(argv[i], "--pid")) child = (pid_t)atoi(argv[i + 1]);
+        else if (!strcmp(argv[i], "--kok")) kok = argv[i + 1];
     }
     char defpath[64];
     if (!fbpath) {
@@ -309,12 +407,23 @@ int main(int argc, char **argv)
                 switch (ev.type) {
                 case AE_KEY: on_key(&ev.key); break;
                 case AE_MOUSE: on_mouse(&ev.mouse); break;
-                case AE_FOCUS: if (!ev.focused) release_all(); break;
+                case AE_FOCUS:
+                    if (!ev.focused) {
+                        release_all();
+                        pano_pull();
+                    } else {
+                        pano_push();
+                    }
+                    break;
                 case AE_RESIZE: sync_frame(1); break;
                 case AE_CLOSE: quit = 1; break;
                 default: break;
                 }
             }
+        }
+        if (pull_at && now_ms() >= pull_at) {
+            pull_at = 0;
+            pano_pull();
         }
         if (now_ms() >= next) {
             sync_frame(0);

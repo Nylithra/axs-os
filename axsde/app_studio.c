@@ -34,7 +34,11 @@ typedef struct {
     long msg_until;
     /* hızlı yol: yalnızca bu satırları + durum çubuğunu yeniden çiz */
     int fast_ok, fast_n, fast_lines[2];
+    /* seçim: çapa (al, ac) ile imleç (cl, cc) arası */
+    int sel, al, ac, selecting;
 } St;
+
+enum { SA_CUT = 1, SA_COPY, SA_PASTE, SA_ALL };
 
 static const char *SAMPLE =
     "# Axs Stüdyo'ya hoş geldin!\n"
@@ -178,6 +182,89 @@ static int col_byte(const Line *l, int col)
         c++;
     }
     return i;
+}
+
+/* ------------------------------------------------------------------ */
+/* Seçim ve pano                                                       */
+/* ------------------------------------------------------------------ */
+
+static int has_sel(St *st) { return st->sel && (st->al != st->cl || st->ac != st->cc); }
+
+static void sel_range(St *st, int *l0, int *c0, int *l1, int *c1)
+{
+    if (st->al < st->cl || (st->al == st->cl && st->ac <= st->cc)) {
+        *l0 = st->al; *c0 = st->ac; *l1 = st->cl; *c1 = st->cc;
+    } else {
+        *l0 = st->cl; *c0 = st->cc; *l1 = st->al; *c1 = st->ac;
+    }
+}
+
+static char *sel_text(St *st)
+{
+    int l0, c0, l1, c1;
+    sel_range(st, &l0, &c0, &l1, &c1);
+    size_t cap = 1, n = 0;
+    for (int i = l0; i <= l1; i++)
+        cap += st->ln[i].len + 1;
+    char *o = malloc(cap);
+    for (int i = l0; i <= l1; i++) {
+        Line *l = &st->ln[i];
+        int a = i == l0 ? c0 : 0, b = i == l1 ? c1 : l->len;
+        memcpy(o + n, l->s + a, b - a);
+        n += b - a;
+        if (i < l1)
+            o[n++] = '\n';
+    }
+    o[n] = 0;
+    return o;
+}
+
+static void del_sel(St *st)
+{
+    int l0, c0, l1, c1;
+    sel_range(st, &l0, &c0, &l1, &c1);
+    Line *a = &st->ln[l0];
+    if (l0 == l1) {
+        line_delete(a, c0, c1 - c0);
+    } else {
+        Line *b = &st->ln[l1];
+        a->len = c0;
+        a->s[c0] = 0;
+        line_insert(a, c0, b->s + c1, b->len - c1);
+        for (int i = l1; i > l0; i--)
+            lines_remove(st, i);
+    }
+    st->cl = l0;
+    st->cc = c0;
+    st->sel = 0;
+}
+
+/* çok satırlı metni imlece ekle (sekme -> iki boşluk, CR atılır) */
+static void paste_text(St *st, const char *t)
+{
+    if (has_sel(st))
+        del_sel(st);
+    st->sel = 0;
+    for (const char *p = t; *p; p++) {
+        if (*p == '\r')
+            continue;
+        if (*p == '\n') {
+            Line *l = &st->ln[st->cl];
+            lines_insert(st, st->cl + 1);
+            l = &st->ln[st->cl];   /* realloc sonrası */
+            line_set(&st->ln[st->cl + 1], l->s + st->cc, l->len - st->cc);
+            l->len = st->cc;
+            l->s[l->len] = 0;
+            st->cl++;
+            st->cc = 0;
+        } else if (*p == '\t') {
+            line_insert(&st->ln[st->cl], st->cc, "  ", 2);
+            st->cc += 2;
+        } else {
+            line_insert(&st->ln[st->cl], st->cc, p, 1);
+            st->cc++;
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -501,6 +588,18 @@ static Rect draw_line_row(Win *w, Surf *s, int li, uint32_t *cols, uint8_t *bold
               cur ? T.subtext : HEX(0x45475A), num);
     surf_clip(s, rect_isect(oc, rect_isect(band, (Rect){ GUTTER + 6, er.y, W - GUTTER - 6, er.h })));
     int n = mini(l->len, 4096);
+    if (has_sel(st)) {
+        int l0, c0, l1, c1;
+        sel_range(st, &l0, &c0, &l1, &c1);
+        if (li >= l0 && li <= l1) {
+            int a = li == l0 ? char_col(l->s, c0) : 0;
+            int b = li == l1 ? char_col(l->s, c1) : char_col(l->s, l->len) + 1;
+            a = maxi(a - st->hx, 0);
+            b -= st->hx;
+            if (b > a)
+                fill_rect(s, (Rect){ GUTTER + 10 + a * cw, y - 2, (b - a) * cw, LH }, ALPHA(T.accent, 110));
+        }
+    }
     highlight(l->s, n, cols, bold);
     int c = 0;
     const char *p = l->s;
@@ -783,8 +882,9 @@ static void st_key(Win *w, KeyEv *e)
     if (!e->down)
         return;
     int o_top = st->top, o_hx = st->hx, o_n = st->n, o_cl = st->cl, o_mod = st->modified, o_out = st->out_focus;
+    int o_sel = has_sel(st);
     st_key_inner(w, e);
-    if (w->dirty && st->top == o_top && st->hx == o_hx && st->n == o_n && st->modified == o_mod &&
+    if (w->dirty && !o_sel && !has_sel(st) && st->top == o_top && st->hx == o_hx && st->n == o_n && st->modified == o_mod &&
         st->out_focus == o_out && !o_out) {
         st->fast_ok = 1;
         st->fast_n = 0;
@@ -823,6 +923,76 @@ static void st_key_inner(Win *w, KeyEv *e)
         }
         w->dirty = 1;
         return;
+    }
+    int shift = e->mods & MOD_SHIFT;
+    if (key_is_modifier(e->code))
+        return;   /* Ctrl/Shift tek başına seçimi bozmasın */
+    /* pano kısayolları */
+    if ((ctrl && (e->code == KEY_A || e->code == KEY_C || e->code == KEY_X || e->code == KEY_V)) ||
+        (shift && e->code == KEY_INSERT)) {
+        int a = e->code == KEY_A ? SA_ALL : e->code == KEY_C ? SA_COPY : e->code == KEY_X ? SA_CUT : SA_PASTE;
+        if (!has_sel(st) && (a == SA_COPY || a == SA_CUT)) {   /* seçim yoksa satırın tamamı */
+            st->sel = 1;
+            st->al = st->cl;
+            st->ac = 0;
+            if (st->cl + 1 < st->n) {
+                st->cl++;
+                st->cc = 0;
+            } else {
+                st->cc = st->ln[st->cl].len;
+            }
+        }
+        if (a == SA_ALL) {
+            st->sel = 1;
+            st->al = st->ac = 0;
+            st->cl = st->n - 1;
+            st->cc = st->ln[st->cl].len;
+        } else if (a == SA_COPY) {
+            char *t = sel_text(st);
+            clip_set(t);
+            free(t);
+            int l0, c0, l1, c1;
+            sel_range(st, &l0, &c0, &l1, &c1);
+            st->sel = 0;
+            st->cl = l0;
+            st->cc = c0;
+            flash(st, "Kopyalandı");
+        } else if (a == SA_CUT) {
+            char *t = sel_text(st);
+            clip_set(t);
+            free(t);
+            del_sel(st);
+            edited(w);
+        } else {
+            paste_text(st, clip_get());
+            edited(w);
+        }
+        st->want = -1;
+        ensure_visible(w);
+        w->dirty = 1;
+        return;
+    }
+    int movement = e->code == KEY_LEFT || e->code == KEY_RIGHT || e->code == KEY_UP || e->code == KEY_DOWN ||
+                   e->code == KEY_PAGEUP || e->code == KEY_PAGEDOWN || e->code == KEY_HOME || e->code == KEY_END;
+    if (movement) {
+        if (shift && !st->sel) {
+            st->sel = 1;
+            st->al = st->cl;
+            st->ac = st->cc;
+        } else if (!shift) {
+            st->sel = 0;
+        }
+    } else if (has_sel(st) && (e->code == KEY_BACKSPACE || e->code == KEY_DELETE)) {
+        del_sel(st);
+        edited(w);
+        ensure_visible(w);
+        w->dirty = 1;
+        return;
+    } else if (has_sel(st) && (e->code == KEY_ENTER || e->code == KEY_KPENTER || e->code == KEY_TAB ||
+                               (!ctrl && e->ch >= 32))) {
+        del_sel(st);   /* yazınca seçimin yerine geçer */
+    } else {
+        st->sel = 0;
     }
     Line *l = &st->ln[st->cl];
     int vis = visible_lines(w);
@@ -923,6 +1093,18 @@ static void st_key_inner(Win *w, KeyEv *e)
     w->dirty = 1;
 }
 
+static void st_menu(int a, int id)
+{
+    Win *w = wm_find_id(id);
+    if (!w)
+        return;
+    KeyEv k = { 0 };
+    k.down = 1;
+    k.mods = MOD_CTRL;
+    k.code = a == SA_CUT ? KEY_X : a == SA_COPY ? KEY_C : a == SA_PASTE ? KEY_V : KEY_A;
+    st_key(w, &k);
+}
+
 static void st_mouse(Win *w, MouseEv *e)
 {
     St *st = w->st;
@@ -937,6 +1119,39 @@ static void st_mouse(Win *w, MouseEv *e)
         w->dirty = 1;
         return;
     }
+    if (e->kind == M_MOVE && st->selecting) {
+        int li = clampi(st->top + (e->y - er.y - 6) / LH, 0, st->n - 1);
+        int cw = mono_advance(FS);
+        int col = maxi(0, (e->x - GUTTER - 10 + cw / 2) / cw + st->hx);
+        if (e->y < er.y && st->top > 0)
+            st->top--;
+        else if (e->y > er.y + er.h && st->top + visible_lines(w) < st->n)
+            st->top++;
+        st->cl = li;
+        st->cc = col_byte(&st->ln[li], col);
+        w->dirty = 1;
+        return;
+    }
+    if (e->kind == M_UP && e->button == 1 && st->selecting) {
+        st->selecting = 0;
+        if (!has_sel(st))
+            st->sel = 0;
+        w->dirty = 1;
+    }
+    if (e->kind == M_DOWN && e->button == 2 && rect_has(er, e->x, e->y)) {
+        MenuItem m[4];
+        int n = 0;
+        if (has_sel(st)) {
+            m[n++] = (MenuItem){ "Kes  (Ctrl+X)", SA_CUT, IC_FILE };
+            m[n++] = (MenuItem){ "Kopyala  (Ctrl+C)", SA_COPY, IC_FILE };
+        }
+        if (clip_get()[0])
+            m[n++] = (MenuItem){ "Yapıştır  (Ctrl+V)", SA_PASTE, IC_FILES };
+        m[n++] = (MenuItem){ "Tümünü seç  (Ctrl+A)", SA_ALL, IC_NEW };
+        Rect cr = wm_content_rect(w);
+        wm_menu(cr.x + e->x, cr.y + e->y, m, n, st_menu, w->id);
+        return;
+    }
     if (e->kind == M_DOWN && e->button == 1) {
         if (rect_has(er, e->x, e->y)) {
             st->out_focus = 0;
@@ -947,6 +1162,21 @@ static void st_mouse(Win *w, MouseEv *e)
             st->cc = col_byte(&st->ln[li], col);
             st->want = -1;
             st->blink_on = 1;
+            st->sel = 1;
+            st->al = st->cl;
+            st->ac = st->cc;
+            st->selecting = 1;
+            if (e->clicks == 2) {   /* çift tık: sözcüğü seç */
+                Line *l = &st->ln[li];
+                int a = st->cc, b = st->cc;
+                while (a > 0 && is_ident((unsigned char)l->s[a - 1]))
+                    a--;
+                while (b < l->len && is_ident((unsigned char)l->s[b]))
+                    b++;
+                st->ac = a;
+                st->cc = b;
+                st->selecting = 0;
+            }
             w->dirty = 1;
         } else if (st->out_open && rect_has(out_rect(w), e->x, e->y)) {
             st->out_focus = 1;

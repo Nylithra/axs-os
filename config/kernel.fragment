@@ -192,3 +192,6 @@ CONFIG_JOLIET=y
 CONFIG_MODIFY_LDT_SYSCALL=y
 CONFIG_IA32_EMULATION=y
 CONFIG_X86_16BIT=y
+
+# Pano: QEMU qemu-vdagent (virtio-serial "com.redhat.spice.0") ile ana makine panosu
+CONFIG_VIRTIO_CONSOLE=y
