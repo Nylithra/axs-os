@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AxsOS — Axs dilinin evi</title>
+<meta name="description" content="AxsOS: Linux çekirdeği üzerinde, kendi masaüstü ortamı (AxsDE), kendi programlama dili (Axs) ve kendi paket yöneticisiyle sıfırdan yazılmış Türkçe işletim sistemi.">
+<meta property="og:title" content="AxsOS — Axs dilinin evi">
+<meta property="og:description" content="Kendi masaüstü, kendi dili, kendi paket yöneticisi. 81 MB'lık ISO, BIOS ve UEFI ile açılır.">
+<meta property="og:image" content="https://axs-project.vercel.app/img/og.jpg">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#0b0b14">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%238b5cf6'/%3E%3Cpath d='M18 50 32 14l14 36M23 38h18' stroke='white' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0b14; --bg2:#11111d; --card:#161624; --card2:#1c1c2e; --line:#26263a;
+  --text:#ececf4; --muted:#9b9bb4; --dim:#6c6c86;
+  --accent:#8b5cf6; --accent2:#a78bfa; --pink:#ec4899; --blue:#3b82f6; --green:#22c55e;
+  --radius:18px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;overflow-x:hidden}
+body{background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+img{display:block;max-width:100%;height:auto}
+code,pre,.mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px}
+
+/* arka plan ışıkları */
+.bgfx{position:absolute;top:0;left:0;right:0;height:1400px;overflow:hidden;pointer-events:none;z-index:0}
+.glow{position:absolute;border-radius:50%;filter:blur(110px);opacity:.45;pointer-events:none;z-index:0}
+.g1{width:520px;height:520px;background:#5b21b6;top:-160px;left:-120px}
+.g2{width:460px;height:460px;background:#9d174d;top:40px;right:-160px;opacity:.28}
+.g3{width:600px;height:600px;background:#1e3a8a;top:520px;left:30%;opacity:.25}
+
+/* üst çubuk */
+nav{position:sticky;top:0;z-index:50;background:rgba(11,11,20,.72);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid rgba(255,255,255,.06)}
+nav .wrap{display:flex;align-items:center;gap:28px;height:62px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:19px;letter-spacing:-.02em}
+.brand svg{width:30px;height:30px}
+nav .links{display:flex;gap:24px;margin-left:auto;font-size:14.5px;color:var(--muted)}
+nav .links a:hover{color:var(--text)}
+.btn{display:inline-flex;align-items:center;gap:9px;padding:12px 22px;border-radius:12px;font-weight:600;font-size:15px;transition:.2s;border:1px solid transparent;cursor:pointer}
+.btn-p{background:var(--accent);color:#fff;box-shadow:0 8px 30px -8px rgba(139,92,246,.7)}
+.btn-p:hover{background:#7c4ef0;transform:translateY(-1px)}
+.btn-g{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.1)}
+.btn-g:hover{background:rgba(255,255,255,.1)}
+.btn svg{width:18px;height:18px}
+nav .btn{padding:8px 16px;font-size:14px}
+
+/* giriş */
+header.hero{position:relative;padding:84px 0 40px;text-align:center}
+.pill{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border-radius:99px;background:rgba(139,92,246,.12);border:1px solid rgba(139,92,246,.3);color:var(--accent2);font-size:13.5px;font-weight:500;margin-bottom:26px}
+.pill i{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green)}
+h1{font-size:clamp(40px,7vw,76px);line-height:1.04;letter-spacing:-.045em;font-weight:800}
+h1 span{background:linear-gradient(120deg,#c4b5fd 0%,#8b5cf6 40%,#ec4899 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{max-width:680px;margin:22px auto 0;font-size:clamp(16px,2.2vw,19px);color:var(--muted)}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:34px}
+.meta{margin-top:16px;font-size:13px;color:var(--dim)}
+.shot-hero{position:relative;margin:60px auto 0;max-width:1080px;z-index:1}
+.frame{border-radius:14px;overflow:hidden;border:1px solid rgba(255,255,255,.1);box-shadow:0 40px 120px -30px rgba(139,92,246,.45),0 20px 60px -20px rgba(0,0,0,.8);background:#000}
+.frame img{width:100%;aspect-ratio:16/10;object-fit:cover}
+.shot-hero:before{content:"";position:absolute;inset:-2px;border-radius:16px;background:linear-gradient(140deg,rgba(167,139,250,.6),transparent 35%,transparent 65%,rgba(236,72,153,.5));z-index:-1}
+
+/* rakamlar */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin:70px 0 0}
+.stats div{background:var(--bg2);padding:26px 22px;text-align:center}
+.stats b{display:block;font-size:30px;font-weight:800;letter-spacing:-.03em}
+.stats span{font-size:13.5px;color:var(--muted)}
+
+section{position:relative;padding:100px 0 0}
+.sh{max-width:680px;margin-bottom:46px}
+.sh.c{margin-left:auto;margin-right:auto;text-align:center}
+.kicker{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.12em;color:var(--accent2);margin-bottom:12px}
+h2{font-size:clamp(30px,4.5vw,46px);line-height:1.1;letter-spacing:-.035em;font-weight:800}
+.sh p{margin-top:16px;color:var(--muted);font-size:17px}
+
+/* özellik kartları */
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.card{background:linear-gradient(180deg,var(--card),var(--bg2));border:1px solid var(--line);border-radius:var(--radius);padding:26px;transition:.25s}
+.card:hover{border-color:rgba(139,92,246,.45);transform:translateY(-3px)}
+.ic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;margin-bottom:18px}
+.ic svg{width:22px;height:22px;stroke:#fff;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.card h3{font-size:18px;letter-spacing:-.015em;margin-bottom:8px}
+.card p{color:var(--muted);font-size:14.5px}
+
+/* galeri */
+.tabs{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:26px}
+.tab{padding:9px 16px;border-radius:99px;background:rgba(255,255,255,.04);border:1px solid var(--line);color:var(--muted);font-size:14px;font-weight:500;cursor:pointer;transition:.2s;font-family:inherit}
+.tab:hover{color:var(--text)}
+.tab.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.viewer{max-width:1040px;margin:0 auto}
+.viewer .frame{cursor:zoom-in}
+.viewer .frame img{transition:opacity .25s}
+.cap{text-align:center;margin-top:20px;color:var(--muted);font-size:15.5px;min-height:50px;max-width:720px;margin-left:auto;margin-right:auto}
+.cap b{color:var(--text)}
+
+/* bölünmüş satırlar */
+.split{display:grid;grid-template-columns:1fr 1.15fr;gap:56px;align-items:center}
+.split.r{grid-template-columns:1.15fr 1fr}
+.split.r .txt{order:2}
+.txt h2{font-size:clamp(28px,3.8vw,40px)}
+.txt p{color:var(--muted);margin-top:16px;font-size:16.5px}
+ul.check{list-style:none;margin-top:22px;display:grid;gap:11px}
+ul.check li{display:flex;gap:11px;font-size:15px;color:#d4d4e2}
+ul.check li:before{content:"";flex:none;width:20px;height:20px;margin-top:2px;border-radius:6px;background:rgba(139,92,246,.18) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a78bfa' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5L20 7'/%3E%3C/svg%3E") center/13px no-repeat}
+.split .frame img{aspect-ratio:16/10}
+
+/* kod */
+.code{background:#0e0e18;border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 30px 80px -30px rgba(0,0,0,.8)}
+.code .bar{display:flex;align-items:center;gap:7px;padding:12px 16px;background:#151522;border-bottom:1px solid var(--line);font-size:13px;color:var(--muted)}
+.code .bar i{width:11px;height:11px;border-radius:50%;background:#ff5f57}
+.code .bar i:nth-child(2){background:#febc2e}.code .bar i:nth-child(3){background:#28c840;margin-right:10px}
+.code pre{padding:20px 22px;font-size:14px;line-height:1.75;overflow-x:auto;color:#d6d6e6}
+.k{color:#c084fc}.s{color:#86efac}.n{color:#fdba74}.cm{color:#6b6b88;font-style:italic}.f{color:#93c5fd}
+.out{border-top:1px solid var(--line);padding:14px 22px;font-size:13.5px;color:#a3e635;background:#0b0b13}
+.out span{color:var(--dim)}
+
+/* kurulum */
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.step{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:26px;position:relative}
+.step .num{font-size:13px;font-weight:700;color:var(--accent2);margin-bottom:10px}
+.step h3{font-size:18px;margin-bottom:8px}
+.step p{color:var(--muted);font-size:14.5px}
+.step pre{margin-top:14px;background:#0b0b13;border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:12.5px;color:#c7c7da;overflow-x:auto;white-space:pre}
+.req{margin-top:22px;display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
+.req span{font-size:13.5px;color:var(--muted);padding:7px 14px;border:1px solid var(--line);border-radius:99px;background:var(--bg2)}
+
+/* son çağrı */
+.final{margin:110px 0 0;border-radius:28px;padding:64px 28px;text-align:center;background:radial-gradient(120% 140% at 50% 0%,rgba(139,92,246,.35),transparent 60%),var(--bg2);border:1px solid rgba(139,92,246,.3);position:relative;overflow:hidden}
+.final h2{max-width:640px;margin:0 auto}
+.final p{color:var(--muted);margin:16px auto 0;max-width:560px}
+footer{padding:60px 0 40px;color:var(--dim);font-size:14px}
+footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:28px}
+footer a:hover{color:var(--text)}
+
+/* büyük görüntü */
+.lb{position:fixed;inset:0;z-index:100;background:rgba(5,5,10,.92);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;padding:24px;cursor:zoom-out}
+.lb.on{display:flex}
+.lb img{max-width:min(1280px,100%);max-height:90vh;border-radius:10px;box-shadow:0 30px 100px rgba(0,0,0,.7)}
+.lb button{position:absolute;top:50%;transform:translateY(-50%);width:46px;height:46px;border-radius:50%;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:#fff;font-size:22px;cursor:pointer}
+.lb .p{left:18px}.lb .x{right:18px}
+
+.reveal{opacity:0;transform:translateY(24px);transition:opacity .7s ease,transform .7s ease}
+.reveal.in{opacity:1;transform:none}
+@media (prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none}html{scroll-behavior:auto}}
+
+@media (max-width:900px){
+  nav .links{display:none}
+  nav .btn{margin-left:auto}
+  .grid,.steps{grid-template-columns:1fr 1fr}
+  .split,.split.r{grid-template-columns:1fr;gap:30px}
+  .split.r .txt{order:0}
+  .stats{grid-template-columns:1fr 1fr}
+  .stats b{font-size:24px;white-space:nowrap}
+}
+@media (max-width:600px){
+  .wrap{padding:0 16px}
+  .grid,.steps{grid-template-columns:1fr}
+  header.hero{padding-top:56px}
+  section{padding-top:76px}
+  .lb button{display:none}
+}
+</style>
+</head>
+<body>
+<div class="bgfx"><div class="glow g1"></div><div class="glow g2"></div><div class="glow g3"></div></div>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#">
+      <svg viewBox="0 0 64 64"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a78bfa"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs><rect width="64" height="64" rx="15" fill="url(#lg)"/><path d="M19 50 32 14l13 36M24 38h16" stroke="#fff" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      AxsOS
+    </a>
+    <div class="links">
+      <a href="#ozellikler">Özellikler</a>
+      <a href="#ekranlar">Ekranlar</a>
+      <a href="#axs">Axs dili</a>
+      <a href="#kurulum">Kurulum</a>
+      <a href="https://github.com/Nylithra/axs-os" target="_blank" rel="noopener">GitHub</a>
+    </div>
+    <a class="btn btn-p" href="https://github.com/Nylithra/axs-os/releases/download/son-surum/axsos.iso">İndir</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap" style="position:relative;z-index:1">
+    <div class="pill"><i></i> Açık kaynak · Linux 6.12 LTS · BIOS + UEFI</div>
+    <h1>Kendi dili olan<br><span>işletim sistemi.</span></h1>
+    <p class="lead">AxsOS; Linux çekirdeği üzerinde sıfırdan yazılmış masaüstü ortamı <b>AxsDE</b>, Türkçe programlama dili <b>Axs</b> ve kendi paket yöneticisi <b>axpkg</b> ile gelen, tamamen Türkçe bir işletim sistemi.</p>
+    <div class="cta">
+      <a class="btn btn-p" href="https://github.com/Nylithra/axs-os/releases/download/son-surum/axsos.iso">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16"/></svg>
+        ISO'yu indir · 81 MB
+      </a>
+      <a class="btn btn-g" href="#ekranlar">Ekranlara göz at</a>
+    </div>
+    <p class="meta">Her güncellemede ISO, sanal makinede otomatik açılıp test edildikten sonra yayınlanır.</p>
+  </div>
+  <div class="wrap">
+    <div class="shot-hero reveal">
+      <div class="frame"><img src="img/masaustu.webp" alt="AxsOS masaüstü: AxsDE, Hoş Geldin penceresi ve dock" width="1280" height="800" fetchpriority="high"></div>
+    </div>
+    <div class="stats reveal">
+      <div><b>81 MB</b><span>tüm sistem, tek ISO</span></div>
+      <div><b>Linux 6.12</b><span>LTS çekirdek</span></div>
+      <div><b>512 MB</b><span>bellek yeter</span></div>
+      <div><b>%100</b><span>Türkçe arayüz</span></div>
+    </div>
+  </div>
+</header>
+
+<section id="ozellikler">
+  <div class="wrap">
+    <div class="sh c reveal">
+      <div class="kicker">Neler var?</div>
+      <h2>Küçük ama gerçek bir sistem</h2>
+      <p>Tarayıcıda çalışan bir taklit değil: kendi çekirdeği, kendi açılışı, kendi masaüstüyle bilgisayarda ya da sanal makinede açılan bir işletim sistemi.</p>
+    </div>
+    <div class="grid">
+      <div class="card reveal"><div class="ic" style="background:linear-gradient(135deg,#a78bfa,#7c3aed)"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div><h3>AxsDE masaüstü</h3><p>C ile yazılmış, ekrana doğrudan çizen masaüstü: yuvarlak köşeler, gölgeler, buzlu cam, dock, başlatıcı, bildirimler. Yazılımla çizimde bile akıcı.</p></div>
+      <div class="card reveal"><div class="ic" style="background:linear-gradient(135deg,#f472b6,#db2777)"><svg viewBox="0 0 24 24"><path d="M8 6 2 12l6 6M16 6l6 6-6 6"/></svg></div><h3>Axs programlama dili</h3><p>Türkçe dostu, sade sözdizimli Axs dili kurulu gelir. Axs Stüdyo'da yaz, F5'e bas, çalışsın. <code>use arayuz</code> ile birkaç satırda pencereli program.</p></div>
+      <div class="card reveal"><div class="ic" style="background:linear-gradient(135deg,#fbbf24,#d97706)"><svg viewBox="0 0 24 24"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg></div><h3>Uygulama Marketi</h3><p>axpkg paket yöneticisi internetten paket indirir, sha256 ile doğrular, bağımlılıkları çözer. Oyunlar, araçlar ve tarayıcılar tek tıkla.</p></div>
+      <div class="card reveal"><div class="ic" style="background:linear-gradient(135deg,#60a5fa,#2563eb)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.7 5.7 3.7 9s-1.2 6.3-3.7 9c-2.5-2.7-3.7-5.7-3.7-9S9.5 5.7 12 3z"/></svg></div><h3>Firefox ve Chrome</h3><p>Gerçek ağ kartı sürücüleriyle internete bağlanır. Firefox ve Google Chrome resmi kaynaklarından indirilip AxsDE penceresinde çalışır.</p></div>
+      <div class="card reveal"><div class="ic" style="background:linear-gradient(135deg,#34d399,#059669)"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></div><h3>Windows programları</h3><p>WTA (Windows To AxsOS) ile .exe ve .msi dosyalarına çift tıkla: Wine 11 sayesinde 32 ve 64 bit Windows programları çalışır.</p></div>
+      <div class="card reveal"><div class="ic" style="background:linear-gradient(135deg,#22d3ee,#0891b2)"><svg viewBox="0 0 24 24"><path d="M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z"/><path d="M4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></div><h3>Kalıcı depolama</h3><p>ISO'dan açılır; bir disk takılıysa kurduğun uygulamalar, dosyaların ve ayarların yeniden başlatınca yerinde durur. Tek tıkla fabrika ayarları.</p></div>
+      <div class="card reveal"><div class="ic" style="background:linear-gradient(135deg,#c084fc,#9333ea)"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div><h3>Kullanıcı hesabı</h3><p>İlk açılışta hesabını oluştur; sonra giriş ekranı, Super+L ile kilit. Parolalar SHA-512 ile saklanır.</p></div>
+      <div class="card reveal"><div class="ic" style="background:linear-gradient(135deg,#fb923c,#ea580c)"><svg viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/></svg></div><h3>Ortak pano</h3><p>Ctrl+C / Ctrl+V her yerde çalışır; sanal makinede ana bilgisayarınla pano ortaktır. Dışarıdan kodu yapıştır, çalıştır.</p></div>
+      <div class="card reveal"><div class="ic" style="background:linear-gradient(135deg,#94a3b8,#475569)"><svg viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"/></svg></div><h3>Geliştirici araçları</h3><p>bash, gcc 13, make, binutils, vim, nano, htop, curl, Python 3.13 hazır gelir. Derlediğin program doğrudan çalışır.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="ekranlar">
+  <div class="wrap">
+    <div class="sh c reveal">
+      <div class="kicker">Gerçek ekran görüntüleri</div>
+      <h2>Bir bak, sonra kendin dene</h2>
+      <p>Buradaki her görüntü AxsOS'un sanal makinede çalışırken alınmış gerçek ekranıdır; hiçbiri çizim ya da tasarım taslağı değil.</p>
+    </div>
+    <div class="tabs" id="tabs"></div>
+    <div class="viewer reveal">
+      <div class="frame" id="vframe"><img id="vimg" src="img/kurulum.webp" alt="" width="1280" height="800"></div>
+      <p class="cap" id="vcap"></p>
+    </div>
+  </div>
+</section>
+
+<section id="axs">
+  <div class="wrap split">
+    <div class="txt reveal">
+      <div class="kicker">Axs dili</div>
+      <h2>Sistemin ana dili Axs</h2>
+      <p>Axs, okunması kolay sözdizimiyle öğrenmesi hızlı bir programlama dili. AxsOS'ta Axs Stüdyo ile yazar, tek tuşla çalıştırırsın; çıktı hemen altta görünür.</p>
+      <ul class="check">
+        <li>Sözdizimi renklendirme, otomatik girinti, F5 ile çalıştır</li>
+        <li><code>use arayuz</code> ile düğmeli, giriş kutulu pencereler</li>
+        <li>SQLite, SSL ve zlib dahil; dosyalar, ağ, veritabanı</li>
+        <li>Örnekler ve belgeler sistemle birlikte gelir</li>
+      </ul>
+    </div>
+    <div class="reveal">
+      <div class="code">
+        <div class="bar"><i></i><i></i><i></i>program.axs</div>
+<pre><span class="cm"># Axs Stüdyo'ya hoş geldin!</span>
+ad = <span class="s">"AxsOS"</span>
+<span class="k">print</span>: Merhaba, ad;!
+
+<span class="k">func</span> <span class="f">kare</span>(x)
+  <span class="k">return</span> x * x
+<span class="k">end</span>
+
+<span class="k">for</span> i <span class="k">in</span> [<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>, <span class="n">4</span>, <span class="n">5</span>]
+  <span class="k">print</span>: i; x i; = (<span class="f">kare</span>(i));
+<span class="k">end</span></pre>
+        <div class="out"><span>$ axs program.axs</span><br>Merhaba, AxsOS!<br>1 x 1 = 1<br>2 x 2 = 4<br>3 x 3 = 9 …</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap split r">
+    <div class="txt reveal">
+      <div class="kicker">İnternet</div>
+      <h2>Gerçek tarayıcılar, gerçek internet</h2>
+      <p>Ağ kartın tanınır, adres DHCP ile alınır, saat eşitlenir. Uygulama Marketi'nden Firefox ya da Chrome'u kur: resmi siteden indirilip AxsOS penceresinde açılır.</p>
+      <ul class="check">
+        <li>Intel, Realtek, VirtIO, VMware ağ kartları; IPv4 + IPv6</li>
+        <li>Firefox Türkçe sürüm, Google Chrome resmi paket</li>
+        <li>İndirmeler <code>~/İndirilenler</code> klasörüne</li>
+      </ul>
+    </div>
+    <div class="reveal"><div class="frame"><img src="img/firefox.webp" alt="AxsOS'ta Firefox" loading="lazy" width="1280" height="800"></div></div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap split">
+    <div class="txt reveal">
+      <div class="kicker">Terminal</div>
+      <h2>Geliştiriciler için tam donanımlı</h2>
+      <p>Terminal; 256 renk, fareyle seçim, kopyala/yapıştır ve iş kontrolüyle GNU bash çalıştırır. gcc ile C derle, htop ile sistemi izle, axpkg ile paket kur.</p>
+      <ul class="check">
+        <li>bash 5.2, gcc 13, make, binutils, vim, nano, htop</li>
+        <li><code>axpkg install</code>, <code>search</code>, <code>upgrade</code></li>
+        <li>Bilinmeyen komutta hangi paketi kuracağını söyler</li>
+      </ul>
+    </div>
+    <div class="reveal"><div class="frame"><img src="img/htop.webp" alt="AxsOS terminalinde htop" loading="lazy" width="1280" height="800"></div></div>
+  </div>
+</section>
+
+<section id="kurulum">
+  <div class="wrap">
+    <div class="sh c reveal">
+      <div class="kicker">Kurulum</div>
+      <h2>Üç adımda çalıştır</h2>
+      <p>Bilgisayarına bir şey kurman gerekmez: ISO'yu sanal makinede aç ya da USB belleğe yazıp gerçek bilgisayarda başlat.</p>
+    </div>
+    <div class="steps">
+      <div class="step reveal"><div class="num">01</div><h3>ISO'yu indir</h3><p>Son sürüm her güncellemede otomatik derlenir, test edilir ve yayınlanır.</p>
+        <a class="btn btn-p" style="margin-top:16px" href="https://github.com/Nylithra/axs-os/releases/download/son-surum/axsos.iso">axsos.iso · 81 MB</a></div>
+      <div class="step reveal"><div class="num">02</div><h3>Sanal makinede aç</h3><p>QEMU, VirtualBox ya da VMware. Linux 64 bit seç, 2–4 GB bellek ver.</p>
+<pre>qemu-img create -f qcow2 veri.qcow2 20G
+qemu-system-x86_64 -m 4G -smp 2 \
+  -cdrom axsos.iso -boot d \
+  -drive file=veri.qcow2,if=virtio \
+  -nic user,model=e1000 \
+  -device virtio-tablet-pci</pre></div>
+      <div class="step reveal"><div class="num">03</div><h3>Hesabını oluştur</h3><p>İlk açılışta adını ve parolanı gir, masaüstü açılsın. Disk taktıysan Ayarlar &gt; Depolama'dan tek tıkla kalıcı yap.</p>
+<pre># USB belleğe yazmak için (Linux)
+sudo dd if=axsos.iso of=/dev/sdX \
+  bs=4M status=progress
+# Windows: Rufus (DD kipi)</pre></div>
+    </div>
+    <div class="req reveal">
+      <span>x86-64 işlemci</span><span>512 MB+ bellek (tarayıcı için 3–4 GB)</span><span>BIOS ya da UEFI</span><span>İsteğe bağlı: 20 GB disk</span>
+    </div>
+  </div>
+</section>
+
+<div class="wrap">
+  <div class="final reveal">
+    <h2>AxsOS'u bugün dene</h2>
+    <p>Açık kaynak. Kaynak kodunu incele, tek komutla kendin derle: <code>./build.sh</code></p>
+    <div class="cta">
+      <a class="btn btn-p" href="https://github.com/Nylithra/axs-os/releases/download/son-surum/axsos.iso">ISO'yu indir</a>
+      <a class="btn btn-g" href="https://github.com/Nylithra/axs-os" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.25.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.75.11 3.04.74.8 1.19 1.83 1.19 3.08 0 4.41-2.69 5.38-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z"/></svg>
+        GitHub'da incele
+      </a>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span>AxsOS · Axs dilinin evi</span>
+    <span><a href="https://github.com/Nylithra/axs-os" target="_blank" rel="noopener">Kaynak kodu</a> · <a href="https://github.com/Nylithra/axs" target="_blank" rel="noopener">Axs dili</a> · <a href="https://github.com/Nylithra/axs-os/releases" target="_blank" rel="noopener">Sürümler</a></span>
+  </div>
+</footer>
+
+<div class="lb" id="lb"><button class="p" aria-label="Önceki">‹</button><img id="lbimg" alt=""><button class="x" aria-label="Sonraki">›</button></div>
+
+<script>
+const EKRANLAR = [
+  ["kurulum","İlk açılış","<b>İlk açılış.</b> Adını ve parolanı gir; kullanıcı adın kendiliğinden önerilir. Canlı kipte hesapsız da devam edebilirsin."],
+  ["masaustu","Masaüstü","<b>AxsDE masaüstü.</b> Üst çubuk, dock, masaüstü simgeleri ve Hoş Geldin penceresi."],
+  ["baslatici","Başlatıcı","<b>Başlatıcı.</b> Super ya da Ctrl+Boşluk ile aç; uygulama ara ya da <code>&gt; komut</code> yazıp terminalde çalıştır."],
+  ["studio-calis","Axs Stüdyo","<b>Axs Stüdyo.</b> Axs kodunu yaz, F5'e bas; çıktı alttaki panelde."],
+  ["market","Uygulama Marketi","<b>Uygulama Marketi.</b> Kategoriler, öne çıkanlar, arama; Kur / Aç / Güncelle / Kaldır tek tıkla."],
+  ["terminal","Terminal","<b>Terminal.</b> GNU bash; Linux 6.12, Axs, gcc 13 ve Python 3.13 hazır."],
+  ["oyun","Oyunlar","<b>Oyunlar.</b> Marketten kurulan 2048, Yılan ve Mayın Tarlası kendi pencerelerinde çalışır."],
+  ["wta","Windows programları","<b>WTA.</b> Windows programları (burada Not Defteri) Wine ile AxsDE penceresinde."],
+  ["dosyalar","Dosyalar","<b>Dosyalar.</b> Yerler, yeni klasör/belge, kopyala-kes-yapıştır, Çöp Kutusu."],
+  ["ayarlar","Ayarlar","<b>Ayarlar.</b> Hesap, görünüm (5 duvar kâğıdı, 6 vurgu rengi), klavye, saat, ağ, depolama, sistem."],
+  ["izleyici","Sistem İzleyici","<b>Sistem İzleyici.</b> İşlemci ve bellek grafikleri, çalışan süreçler."],
+  ["kilit","Kilit ekranı","<b>Kilit ekranı.</b> Super+L ile kilitle; büyük saat, tarih ve parola."]
+];
+const tabs=document.getElementById('tabs'), vimg=document.getElementById('vimg'), vcap=document.getElementById('vcap');
+let cur=0;
+function goster(i){
+  cur=(i+EKRANLAR.length)%EKRANLAR.length;
+  const [f,,c]=EKRANLAR[cur];
+  vimg.style.opacity=.25;
+  const im=new Image(); im.src='img/'+f+'.webp';
+  im.onload=()=>{vimg.src=im.src;vimg.alt=c.replace(/<[^>]+>/g,'');vimg.style.opacity=1};
+  vcap.innerHTML=c;
+  [...tabs.children].forEach((t,k)=>t.classList.toggle('on',k===cur));
+}
+EKRANLAR.forEach(([f,t],i)=>{const b=document.createElement('button');b.className='tab';b.textContent=t;b.onclick=()=>goster(i);tabs.appendChild(b);
+  const p=new Image(); setTimeout(()=>p.src='img/'+f+'.webp',1500+i*150);});
+goster(0);
+
+const lb=document.getElementById('lb'), lbimg=document.getElementById('lbimg');
+let lbList=[], lbI=0;
+function lbAc(list,i){lbList=list;lbI=i;lbimg.src=lbList[lbI];lb.classList.add('on')}
+function lbGit(d){lbI=(lbI+d+lbList.length)%lbList.length;lbimg.src=lbList[lbI];if(lbList.length===EKRANLAR.length)goster(lbI)}
+document.getElementById('vframe').onclick=()=>lbAc(EKRANLAR.map(e=>'img/'+e[0]+'.webp'),cur);
+document.querySelectorAll('.split .frame,.shot-hero .frame').forEach(f=>{f.style.cursor='zoom-in';f.onclick=()=>lbAc([f.querySelector('img').src],0)});
+lb.onclick=e=>{if(e.target.tagName!=='BUTTON')lb.classList.remove('on')};
+lb.querySelector('.p').onclick=()=>lbGit(-1); lb.querySelector('.x').onclick=()=>lbGit(1);
+document.addEventListener('keydown',e=>{
+  if(lb.classList.contains('on')){if(e.key==='Escape')lb.classList.remove('on');if(e.key==='ArrowRight')lbGit(1);if(e.key==='ArrowLeft')lbGit(-1)}
+});
+
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.12});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+</script>
+</body>
+</html>
